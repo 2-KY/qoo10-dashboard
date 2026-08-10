@@ -3,413 +3,196 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>라쿠텐 BOH 프로모션 대시보드</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<link rel="stylesheet" href="styles.css">
+<title>Qoo10 매출/프로모션 분석 대시보드</title>
+<link rel="stylesheet" href="./css/styles.css">
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <h1>라쿠텐 BOH 프로모션 대시보드</h1>
-    <span id="status" class="badge snap">스냅샷</span>
-    <span id="asof" class="muted-note"></span>
-    <button class="btn" id="refresh">↻ GitHub에서 다시 불러오기</button>
-  </header>
 
-  <div class="tabs">
-    <button class="tab active" data-t="0">① 월별 대시보드</button>
-    <button class="tab" data-t="1">② 프로모션 분석</button>
-    <button class="tab" data-t="2">③ 프로모션 일별 분석</button>
-    <button class="tab" data-t="3">④ 프로모션 비교</button>
-    <button class="tab" data-t="4">⑤ 연간 데이터</button>
-    <button class="tab" data-t="5">⑥ 유입 분석</button>
-    <button class="tab" data-t="6">⑦ 어필리에이트 분석</button>
-    <button class="tab" data-t="7">⑧ 쿠폰 분석</button>
+<div class="app">
+  <!-- ================= SIDEBAR ================= -->
+  <div class="sidebar">
+    <div class="brand"><span class="dot"></span>Qoo10 Analytics</div>
+    <div class="brand-sub">BIOHEAL BOH · 바이오힐보</div>
+    <div class="navitem active" data-nav="annual"><span class="navicon">①</span>연간 대시보드</div>
+    <div class="navitem" data-nav="monthly"><span class="navicon">②</span>월별 대시보드</div>
+    <div class="navitem" data-nav="promo"><span class="navicon">③</span>프로모션 비교</div>
+    <div class="navitem" data-nav="daily"><span class="navicon">④</span>프로모션 일별 분석</div>
+    <div class="navitem" data-nav="inflow"><span class="navicon">⑤</span>유입 분석</div>
+    <div class="navitem" data-nav="coupon"><span class="navicon">⑥</span>쿠폰 분석</div>
+    <div class="sidebar-footer" id="data-source-badge"></div>
   </div>
 
-  <section class="panel active" id="p0">
-    <div class="ctl"><label>조회 월</label><select id="m-month"></select>
-      <span class="muted-note">직전비 = 동일 프로모션의 직전 행사가 있던 달 · 전년비 = 전년 동월</span></div>
-    <div id="m-band"></div>
-    <div class="memo-box" data-memo-key="monthly">
-      <div class="memo-head">
-        <div class="memo-label">📝 메모</div>
-        <button type="button" class="btn memo-add-btn">+ 메모 추가</button>
-      </div>
-      <div class="memo-add-wrap" style="display:none">
-        <textarea class="memo-add-input" placeholder="예: 재고 부족으로 쿠폰 노출 축소, 광고 OFF, 이벤트 대상 상품 변경 등"></textarea>
-        <div class="memo-entry-actions">
-          <button type="button" class="btn memo-add-save">저장</button>
-          <button type="button" class="btn memo-add-cancel">취소</button>
-        </div>
-      </div>
-      <div class="memo-body"></div>
+  <!-- ================= MAIN ================= -->
+  <div class="main">
+    <div class="topbar" id="topbar"></div>
+
+    <div id="loading-state" class="loading-state">
+      <div class="spinner"></div><div>데이터를 불러오는 중입니다…</div>
     </div>
-    <div class="grid" id="m-kpi" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));"></div>
-    <div class="sec">일별 매출 추이 (단위: 엔)</div>
-    <div class="chartbox"><div class="ch"><canvas id="m-chart"></canvas></div></div>
-    <div class="sec">SKU별 분해 (당월 · 매출 단위: 엔)</div>
-    <div class="tbl-scroll"><table id="m-sku"></table></div>
-  </section>
+    <div id="error-state" class="error-state" style="display:none;"></div>
 
-  <section class="panel" id="p1">
-    <div class="ctl"><label>프로모션 선택</label><select id="a-promo"></select>
-      <span class="pill" id="a-period"></span></div>
-    <div id="a-band"></div>
-    <div class="info">직전비/전년비 = 프로모션_항목 시트의 <b>직전·전년 기간</b>을 RAW에서 자동 집계해 비교합니다.</div>
-    <div class="memo-box" data-memo-key="promo">
-      <div class="memo-head">
-        <div class="memo-label">📝 메모</div>
-        <button type="button" class="btn memo-add-btn">+ 메모 추가</button>
-      </div>
-      <div class="memo-add-wrap" style="display:none">
-        <textarea class="memo-add-input" placeholder="예: 재고 부족으로 쿠폰 노출 축소, 광고 OFF, 이벤트 대상 상품 변경 등"></textarea>
-        <div class="memo-entry-actions">
-          <button type="button" class="btn memo-add-save">저장</button>
-          <button type="button" class="btn memo-add-cancel">취소</button>
+    <div class="content" id="content" style="display:none;">
+
+      <!-- ========================================================= -->
+      <!-- 1. ANNUAL DASHBOARD -->
+      <!-- ========================================================= -->
+      <div class="screen active" data-screen="annual">
+        <div class="section-title" id="annual-kpi-title">연간 총합 KPI</div>
+        <div class="kpi-grid" id="annual-kpi"></div>
+
+        <div class="section-title">월별 실적 테이블</div>
+        <div class="panel table-wrap" style="padding:8px 12px;">
+          <table id="annual-table">
+            <thead><tr>
+              <th>월</th><th>매출</th><th>목표매출</th><th>달성률</th><th>주문건수</th><th>판매수량</th><th>UV</th><th>객단가</th><th>신규비중</th><th>기존비중</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="section-title">메인 SKU 연간 흐름 <span class="badge-sku">동적 관리</span></div>
+        <div class="hint">숍 전체 흐름과 함께 SKU별 매출/판매수량/UV/신규·기존 비중까지 한 화면에서 확인</div>
+        <div class="panel table-wrap" style="padding:8px 12px;">
+          <table id="annual-sku-table">
+            <thead><tr><th>SKU</th><th>매출</th><th>매출비중</th><th>판매수량</th><th>UV</th><th>신규비중</th><th>기존비중</th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
       </div>
-      <div class="memo-body"></div>
-    </div>
-    <div class="sec">숍 전체 (프로모션 기간 합계)</div>
-    <div class="grid" id="a-kpi" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));"></div>
-    <div class="sec">SKU별 성과 (매출 단위: 엔)</div>
-    <div class="tbl-scroll"><table id="a-sku"></table></div>
-  </section>
 
-  <section class="panel" id="p2">
-    <div class="ctl"><label>프로모션 선택</label><select id="d-promo"></select>
-      <span class="pill" id="d-period"></span></div>
-    <div id="d-band"></div>
-
-    <!-- 1. 프로모션 일별 누계 실적 -->
-    <div class="sec" style="margin-top:0" id="d-kpi-title">누계 실적</div>
-    <div class="tbl-scroll"><table id="d-kpi"></table></div>
-    <details class="ai-details">
-      <summary>누계실적 AI 분석 보기</summary>
-      <div class="chartbox" id="d-ai-cum"></div>
-      <div class="memo-box" data-memo-key="daily-cum">
-        <div class="memo-head">
-          <div class="memo-label">📝 메모</div>
-          <button type="button" class="btn memo-add-btn">+ 메모 추가</button>
+      <!-- ========================================================= -->
+      <!-- 2. MONTHLY DASHBOARD -->
+      <!-- ========================================================= -->
+      <div class="screen" data-screen="monthly">
+        <div class="section-title" id="monthly-target-title">목표 달성 현황</div>
+        <div class="panel">
+          <div class="target-wrap" id="monthly-target"></div>
         </div>
-        <div class="memo-add-wrap" style="display:none">
-          <textarea class="memo-add-input" placeholder="예: 재고 부족으로 쿠폰 노출 축소, 광고 OFF, 이벤트 대상 상품 변경 등"></textarea>
-          <div class="memo-entry-actions">
-            <button type="button" class="btn memo-add-save">저장</button>
-            <button type="button" class="btn memo-add-cancel">취소</button>
+
+        <div class="section-title">숍 전체 KPI — 금번 / 직전비 / 전년비</div>
+        <div class="legend" id="monthly-legend"></div>
+        <div class="kpi-grid" id="monthly-kpi"></div>
+
+        <div class="section-title">메인 SKU 월간 성과</div>
+        <div class="panel table-wrap" style="padding:8px 12px;">
+          <table id="monthly-sku-table">
+            <thead><tr><th>SKU</th><th>매출</th><th>직전비</th><th>전년비</th><th>판매수량</th><th>UV</th><th>신규비중</th><th>기존비중</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ========================================================= -->
+      <!-- 3. PROMO COMPARISON (핵심 화면) -->
+      <!-- ========================================================= -->
+      <div class="screen" data-screen="promo">
+        <div class="promo-hero" id="promo-hero"></div>
+
+        <div class="legend"><span><i class="c-cur"></i>금번</span><span><i class="c-prev"></i>직전</span><span><i class="c-yoy"></i>전년</span></div>
+
+        <div class="kpi-grid cols4" id="promo-kpi"></div>
+
+        <div class="section-title">숍 전체 + 메인 SKU 상세 비교</div>
+        <div class="tabbar" id="promo-metric-tabs"></div>
+        <div class="panel table-wrap" style="padding:8px 12px;">
+          <table id="promo-table">
+            <thead><tr><th>구분</th><th>금번</th><th>직전</th><th>전년</th><th>직전비</th><th>전년비</th><th>관리</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <div class="add-sku">
+            <input type="text" id="promo-add-input" placeholder="상품번호 입력 (예: 1043733766)">
+            <button class="btn" id="promo-add-btn">+ 추가</button>
+            <span class="hint" style="margin:0 0 0 4px;">추가된 상품은 이 표와 아래 유입·전환율 표에 동시에 반영되며, "고정" 시 다음 조회부터 항상 표시됩니다</span>
           </div>
         </div>
-        <div class="memo-body"></div>
-      </div>
-    </details>
 
-    <!-- 2. 프로모션 일자별 상세 실적 -->
-    <div class="sec" id="d-daily-title">일자별 실적</div>
-    <div class="chartbox"><div class="ch"><canvas id="d-chart"></canvas></div>
-      <div class="legend"><span><i style="border-color:var(--blue)"></i>매출</span><span><i style="border-color:var(--coral);border-top-style:dashed"></i>주문건수</span></div></div>
-    <div class="tbl-scroll"><table id="d-tbl"></table></div>
-    <div class="tbl-scroll"><table id="d-tbl2"></table></div>
-    <details class="ai-details">
-      <summary>일자별 AI 분석 보기</summary>
-      <div class="chartbox" id="d-ai"></div>
-      <div class="memo-box" data-memo-key="daily">
-        <div class="memo-head">
-          <div class="memo-label">📝 메모</div>
-          <button type="button" class="btn memo-add-btn">+ 메모 추가</button>
+        <div class="section-title">숍 전체 + 메인 SKU — 유입 및 구매전환율</div>
+        <div class="hint">※ SKU별 유입 및 구매전환율은 상품상세 PV 기준 추정치입니다. 숍 전체(실측)와 SKU(추정)는 값 옆 라벨로 구분해 표시합니다.</div>
+        <div class="tabbar" id="promo-flow-tabs"></div>
+        <div class="panel table-wrap" style="padding:8px 12px;">
+          <table id="promo-flow-table">
+            <thead id="promo-flow-thead"></thead>
+            <tbody></tbody>
+          </table>
         </div>
-        <div class="memo-add-wrap" style="display:none">
-          <textarea class="memo-add-input" placeholder="예: 재고 부족으로 쿠폰 노출 축소, 광고 OFF, 이벤트 대상 상품 변경 등"></textarea>
-          <div class="memo-entry-actions">
-            <button type="button" class="btn memo-add-save">저장</button>
-            <button type="button" class="btn memo-add-cancel">취소</button>
-          </div>
-        </div>
-        <div class="memo-body"></div>
       </div>
-    </details>
 
-    <!-- 3. 메인 SKU 누계 카드 -->
-    <div class="sec sec-flex">메인 SKU 카드 <span class="chips" id="d-sku-daybtns"></span></div>
-    <div class="skugrid" id="d-skugrid"></div>
-    <details class="ai-details">
-      <summary>메인SKU AI 분석 보기</summary>
-      <div class="chartbox" id="d-ai-mainsku"></div>
-      <div class="memo-box" data-memo-key="daily-mainsku">
-        <div class="memo-head">
-          <div class="memo-label">📝 메모</div>
-          <button type="button" class="btn memo-add-btn">+ 메모 추가</button>
-        </div>
-        <div class="memo-add-wrap" style="display:none">
-          <textarea class="memo-add-input" placeholder="예: 재고 부족으로 쿠폰 노출 축소, 광고 OFF, 이벤트 대상 상품 변경 등"></textarea>
-          <div class="memo-entry-actions">
-            <button type="button" class="btn memo-add-save">저장</button>
-            <button type="button" class="btn memo-add-cancel">취소</button>
-          </div>
-        </div>
-        <div class="memo-body"></div>
-      </div>
-    </details>
+      <!-- ========================================================= -->
+      <!-- 4. PROMO DAILY -->
+      <!-- ========================================================= -->
+      <div class="screen" data-screen="daily">
+        <div class="section-title" id="daily-title">프로모션 일별 분석</div>
+        <div class="hint" id="daily-halfday-hint" style="display:none;"></div>
+        <div class="day-pills" id="day-pills"></div>
 
-    <!-- 4. 추가 SKU 카드 (신규) -->
-    <div class="sec">추가 SKU 카드</div>
-    <div id="d-addsku-mgr"></div>
-    <div class="skugrid" id="d-addsku-grid"></div>
-    <details class="ai-details">
-      <summary>추가SKU AI 분석 보기</summary>
-      <div class="chartbox" id="d-ai-addsku"></div>
-    </details>
-  </section>
+        <div class="kpi-grid flow" id="daily-kpi"></div>
 
-  <section class="panel" id="p3">
-    <div class="sec" style="margin-top:0">비교할 프로모션 선택 (동일 프로모션의 연도/월별 비교)</div>
-    <div class="ctl"><label>기준 프로모션</label><select id="c-base"></select>
-      <button class="btn" id="c-fill">금번·직전·전년 자동구성</button></div>
-    <div id="c-band"></div>
-    <div class="chips" id="c-chips"></div>
-    <div class="ctl"><label>추가</label><select id="c-add"></select></div>
-    <div id="c-diag" class="muted-note" style="margin:-6px 0 12px"></div>
-    <div class="memo-box" data-memo-key="compare">
-      <div class="memo-head">
-        <div class="memo-label">📝 메모</div>
-        <button type="button" class="btn memo-add-btn">+ 메모 추가</button>
-      </div>
-      <div class="memo-add-wrap" style="display:none">
-        <textarea class="memo-add-input" placeholder="예: 재고 부족으로 쿠폰 노출 축소, 광고 OFF, 이벤트 대상 상품 변경 등"></textarea>
-        <div class="memo-entry-actions">
-          <button type="button" class="btn memo-add-save">저장</button>
-          <button type="button" class="btn memo-add-cancel">취소</button>
+        <div class="section-title">일자별 매출 추이 <span class="hint" style="display:inline; margin:0;">(선택한 일자가 진하게 표시됩니다)</span></div>
+        <div class="panel"><div class="trend" id="trend-chart"></div></div>
+
+        <div class="section-title">숍 전체 + 메인 SKU — 선택 구간 실적 (매출·유입·전환율)</div>
+        <div class="panel table-wrap" style="padding:8px 12px;">
+          <table id="daily-table">
+            <thead><tr>
+              <th>구분</th><th>매출</th><th>주문건수</th><th>판매수량</th><th>UV</th><th>객단가</th>
+              <th>전체유입</th><th>내부유입</th><th>내부유입비중</th><th>외부유입</th><th>외부유입비중</th><th>구매전환율</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
       </div>
-      <div class="memo-body"></div>
+
+      <!-- ========================================================= -->
+      <!-- 5. INFLOW -->
+      <!-- ========================================================= -->
+      <div class="screen" data-screen="inflow">
+        <div class="section-title" id="inflow-title">유입 분석</div>
+        <div class="hint">숍 전체 또는 메인 SKU를 선택해 유입 상세를 확인합니다 (26)SHOP_유입현황 시트의 상품코드 기준 SKU별 실측 집계). 기본은 3단 요약만 표시하고, 클릭 시 세부 채널이 펼쳐집니다.</div>
+
+        <div class="tabbar" id="inflow-target-tabs"></div>
+        <div class="add-sku" style="margin:-4px 0 18px;">
+          <input type="text" id="inflow-add-input" placeholder="상품번호 입력">
+          <button class="btn" id="inflow-add-btn">+ 추가하여 보기</button>
+        </div>
+
+        <div class="flow-top" id="inflow-flow-top"></div>
+
+        <div class="section-title">카테고리별 드릴다운 <span class="hint" style="display:inline; margin:0;">(클릭하여 펼치기)</span></div>
+        <div class="accordion" id="inflow-accordion"></div>
+
+        <div class="section-title">일별 유입 추이 — 금번 · 직전 · 전년 비교</div>
+        <div class="hint">탭을 선택하면 해당 유입 구분(전체/내부/외부)의 일자별 금번·직전·전년 수치와 증감을 비교합니다</div>
+        <div class="tabbar" id="flow-tabs"></div>
+        <div class="panel table-wrap" style="padding:8px 12px;">
+          <table id="flow-daily-table">
+            <thead><tr>
+              <th>구분</th><th>금번</th><th>직전</th><th>전년</th><th>직전차</th><th>직전비</th><th>전년차</th><th>전년비</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ========================================================= -->
+      <!-- 6. COUPON -->
+      <!-- ========================================================= -->
+      <div class="screen" data-screen="coupon">
+        <div class="section-title" id="coupon-title">쿠폰 분석</div>
+        <div class="warn-banner" id="coupon-warning"></div>
+        <div class="panel" style="padding:8px 12px;">
+          <table>
+            <thead><tr>
+              <th>쿠폰명</th><th>할인조건</th><th>발행량</th><th>사용량</th><th>사용률</th><th>적용주문</th><th>적용매출</th><th>쿠폰비용</th><th>효율</th>
+            </tr></thead>
+            <tbody id="coupon-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
     </div>
-
-    <div class="sec">숍 전체 지표 비교 (매출·객단가 단위: 엔)</div>
-    <div class="tbl-scroll"><table id="c-shop"></table></div>
-    <div class="sec">매출 비교 (단위: 엔)</div>
-    <div class="chartbox"><div class="ch" style="height:190px"><canvas id="c-bar"></canvas></div></div>
-
-    <div class="sec">일별 비교 (숍 전체) — 경과일 1일차 기준</div>
-    <div class="ctl"><label>지표</label><select id="c-metric"><option>매출</option><option>주문건수</option><option>판매수량</option><option>UV</option></select></div>
-    <div class="chartbox"><div class="ch"><canvas id="c-line"></canvas></div><div class="legend" id="c-line-lg"></div></div>
-
-    <div class="sec">SKU별 일별 비교 — SKU 선택 시 해당 SKU의 경과일별 추이</div>
-    <div class="ctl"><label>SKU</label><select id="c-sku"></select><label>지표</label>
-      <select id="c-sku-metric"><option>매출</option><option>판매수량</option><option>UV</option></select></div>
-    <div class="chartbox"><div class="ch"><canvas id="c-sku-line"></canvas></div><div class="legend" id="c-sku-lg"></div></div>
-
-    <div class="sec">SKU 비교 그룹 관리 — 상품번호가 달라도 동일 마케팅 포지션이면 하나의 카드로 비교</div>
-    <div id="c-grp-mgr"></div>
-
-    <div class="sec">SKU별 요약 비교 (4개 SKU 동시 · 매출 단위: 엔)</div>
-    <div class="skugrid" id="c-skugrid"></div>
-  </section>
-
-  <section class="panel" id="p4">
-    <div class="ctl"><label>연도 선택</label><select id="y-year"></select>
-      <span class="muted-note">숍 전체 및 SKU별 월별 취합 수치 (매출·객단가 단위: 엔)</span></div>
-    <div class="memo-box" data-memo-key="yearly">
-      <div class="memo-head">
-        <div class="memo-label">📝 메모</div>
-        <button type="button" class="btn memo-add-btn">+ 메모 추가</button>
-      </div>
-      <div class="memo-add-wrap" style="display:none">
-        <textarea class="memo-add-input" placeholder="예: 재고 부족으로 쿠폰 노출 축소, 광고 OFF, 이벤트 대상 상품 변경 등"></textarea>
-        <div class="memo-entry-actions">
-          <button type="button" class="btn memo-add-save">저장</button>
-          <button type="button" class="btn memo-add-cancel">취소</button>
-        </div>
-      </div>
-      <div class="memo-body"></div>
-    </div>
-    <div class="sec" style="margin-top:0">연간 합계 (숍 전체)</div>
-    <div class="grid" id="y-kpi" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));"></div>
-    <div class="sec">월별 매출 추이 (숍 전체)</div>
-    <div class="chartbox"><div class="ch"><canvas id="y-chart"></canvas></div></div>
-    <div class="sec">숍 전체 월별 상세</div>
-    <div class="tbl-scroll"><table id="y-shop-tbl"></table></div>
-    <div class="sec">SKU별 월별 상세</div>
-    <div class="skugrid" id="y-skugrid"></div>
-  </section>
-
-  <section class="panel" id="p5">
-    <div class="ctl">
-      <label>프로모션</label><select id="f-promo"></select>
-      <label>날짜</label><select id="f-date"><option value="__ALL__">전체</option></select>
-      <span class="pill" id="f-daybadge" style="display:none"></span>
-      <button class="btn" id="f-archive-btn">🏁 프로모션 종료(기록 저장)</button>
-      <span class="pill" id="f-archive-status" style="display:none"></span>
-    </div>
-    <div class="chips" id="f-target-tabs"></div>
-    <div id="f-band"></div>
-    <div class="info" id="f-unit-note"></div>
-
-    <div id="f-content">
-      <!-- 1. 누계 유입 실적 -->
-      <div class="sec" style="margin-top:0">누계 유입 실적</div>
-      <div class="tbl-scroll"><table id="f-kpi"></table></div>
-      <button class="btn" id="f-csv-kpi">⬇ 요약 CSV</button>
-      <details class="ai-details">
-        <summary>누계실적 AI 분석 보기</summary>
-        <div class="chartbox" id="f-ai-cum"></div>
-      </details>
-
-      <!-- 2. 일자별 유입 실적 -->
-      <div class="sec">일자별 유입 실적</div>
-      <div class="chartbox trf-chartbox"><div class="ch"><canvas id="f-chart"></canvas></div>
-        <div class="legend"><span><i style="border-color:var(--blue)"></i>전체</span><span><i style="border-color:var(--teal)"></i>내부</span><span><i style="border-color:var(--coral)"></i>외부</span></div></div>
-      <div class="tbl-scroll"><table id="f-daily"></table></div>
-      <button class="btn" id="f-csv-daily">⬇ 일별 CSV</button>
-      <details class="ai-details">
-        <summary>일자별 AI 분석 보기</summary>
-        <div class="chartbox" id="f-ai-daily"></div>
-      </details>
-      <div class="memo-box" data-memo-key="traffic">
-        <div class="memo-head">
-          <div class="memo-label">📝 메모</div>
-          <button type="button" class="btn memo-add-btn">+ 메모 추가</button>
-        </div>
-        <div class="memo-add-wrap" style="display:none">
-          <textarea class="memo-add-input" placeholder="예: 재고 부족으로 쿠폰 노출 축소, 광고 OFF, 이벤트 대상 상품 변경 등"></textarea>
-          <div class="memo-entry-actions">
-            <button type="button" class="btn memo-add-save">저장</button>
-            <button type="button" class="btn memo-add-cancel">취소</button>
-          </div>
-        </div>
-        <div class="memo-body"></div>
-      </div>
-
-      <!-- 3. 내부 유입 그래프 -->
-      <div class="sec">내부 유입 그래프</div>
-      <div class="chartbox trf-chartbox trf-chartbox-lg"><div class="ch"><canvas id="f-chart-int"></canvas></div></div>
-
-      <!-- 4. 내부 채널별 실적 -->
-      <div class="sec">내부 채널별 실적</div>
-      <div id="f-chan-mgr-int"></div>
-      <div class="tbl-scroll"><table id="f-cat-int"></table></div>
-      <button class="btn" id="f-csv-cat-int">⬇ 내부 채널상세 CSV</button>
-      <div class="muted-note" style="margin:10px 0 4px">채널명을 클릭하면 해당 채널의 금번/직전/전년 비교 일별표가 펼쳐집니다.</div>
-      <div class="tbl-scroll"><table id="f-daily-int-channels"></table></div>
-      <div id="f-daily-int-channels-detail"></div>
-      <button class="btn" id="f-csv-daily-int-channels">⬇ 일별(내부 채널별) CSV</button>
-
-      <!-- 5. 외부 채널별 실적 -->
-      <div class="sec">외부 채널별 실적</div>
-      <div id="f-chan-mgr-ext"></div>
-      <div class="tbl-scroll"><table id="f-cat-ext"></table></div>
-      <button class="btn" id="f-csv-cat-ext">⬇ 외부 채널상세 CSV</button>
-      <div class="muted-note" style="margin:10px 0 4px">채널명을 클릭하면 해당 채널의 금번/직전/전년 비교 일별표가 펼쳐집니다.</div>
-      <div class="tbl-scroll"><table id="f-daily-ext-channels"></table></div>
-      <div id="f-daily-ext-channels-detail"></div>
-      <button class="btn" id="f-csv-daily-ext-channels">⬇ 일별(외부 채널별) CSV</button>
-
-      <!-- 6. 외부 유입 그래프 (표 바로 아래) -->
-      <div class="sec">외부 유입 그래프</div>
-      <div class="chartbox trf-chartbox"><div class="ch"><canvas id="f-chart-ext"></canvas></div></div>
-
-      <details id="f-top30" style="margin-top:16px">
-        <summary>참조원 Top 30 펼쳐보기</summary>
-        <div class="ctl">
-          <input type="search" id="f-top-search" placeholder="참조원 검색">
-          <label>정렬</label><select id="f-top-sort"><option value="val">유입수순</option><option value="share">비중순</option></select>
-        </div>
-        <div class="tbl-scroll"><table id="f-top30-tbl"></table></div>
-        <button class="btn" id="f-csv-top30">⬇ Top30 CSV</button>
-      </details>
-    </div>
-
-    <div id="f-empty-state" style="display:none"></div>
-  </section>
-
-  <section class="panel" id="p6">
-    <div class="sec" style="margin-top:0">전체 프로모션 현황 (연도·월별)</div>
-    <div class="ctl"><label>연도</label><select id="af-summary-year"></select></div>
-    <div class="tbl-scroll"><table id="af-summary-tbl"></table></div>
-
-    <div class="ctl"><label>연도</label><select id="af-year"></select>
-      <label>프로모션</label><select id="af-promo"></select>
-      <span class="pill" id="af-period"></span></div>
-    <div id="af-band"></div>
-    <div class="info"><b>파기(ステータス=2)</b> 데이터만 제외하고 집계합니다(미확정 0·확정 1·공백 모두 포함). 일반/우수 요율은 어필리에이트_RAW 시트 P~Z열의 프로모션별 설정(일반%·우수%)과 RAW의 실제 적용 料率을 비교해 자동으로 구분합니다.</div>
-
-    <div class="sec" style="margin-top:0">AI 분석 (규칙 기반 자동 코멘트)</div>
-    <div class="chartbox" id="af-ai"></div>
-    <div class="memo-box" data-memo-key="affiliate">
-      <div class="memo-head">
-        <div class="memo-label">📝 메모</div>
-        <button type="button" class="btn memo-add-btn">+ 메모 추가</button>
-      </div>
-      <div class="memo-add-wrap" style="display:none">
-        <textarea class="memo-add-input" placeholder="예: 재고 부족으로 쿠폰 노출 축소, 광고 OFF, 이벤트 대상 상품 변경 등"></textarea>
-        <div class="memo-entry-actions">
-          <button type="button" class="btn memo-add-save">저장</button>
-          <button type="button" class="btn memo-add-cancel">취소</button>
-        </div>
-      </div>
-      <div class="memo-body"></div>
-    </div>
-
-    <div class="sec">프로모션 기간 합계 KPI</div>
-    <div class="grid" id="af-kpi" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));"></div>
-
-    <div class="sec">일반 / 우수 요율 비교 (금번 기간)</div>
-    <div class="tbl-scroll"><table id="af-rate-tbl"></table></div>
-
-    <div class="sec">일별 추이 (금번·직전·전년 비교)</div>
-    <div class="ctl"><label>지표</label><select id="af-metric"><option>매출</option><option>발생건수</option><option>수수료</option></select></div>
-    <div class="chartbox"><div class="ch"><canvas id="af-chart"></canvas></div><div class="legend" id="af-chart-lg"></div></div>
-
-    <div class="sec">SKU 랭킹 (매출 상위 30개 · 매출 단위: 엔)</div>
-    <div class="tbl-scroll"><table id="af-sku-rank"></table></div>
-
-    <div class="sec">SKU 상세</div>
-    <div class="ctl"><label>SKU</label><select id="af-sku-detail-select"></select></div>
-    <div class="grid" id="af-sku-detail-kpi" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));"></div>
-  </section>
-
-  <section class="panel" id="p7">
-    <div class="ctl"><label>연도</label><select id="cp-year"></select>
-      <label>프로모션</label><select id="cp-promo"></select>
-      <label>쿠폰 구분</label><select id="cp-kind"></select>
-      <span class="pill" id="cp-period"></span></div>
-    <div id="cp-band"></div>
-    <div class="info">쿠폰 구분 드롭다운은 <b>선택한 프로모션 안에 실제로 존재하는 값</b>만 「쿠폰」 시트 D열에서 자동으로 읽어 구성됩니다(하드코딩 없음). 새 쿠폰 종류가 추가되면 새로고침 시 자동 반영됩니다.</div>
-
-    <div class="sec" style="margin-top:0">AI 분석 (규칙 기반 자동 코멘트)</div>
-    <div class="chartbox" id="cp-ai"></div>
-    <div class="memo-box" data-memo-key="coupon">
-      <div class="memo-head">
-        <div class="memo-label">📝 메모</div>
-        <button type="button" class="btn memo-add-btn">+ 메모 추가</button>
-      </div>
-      <div class="memo-add-wrap" style="display:none">
-        <textarea class="memo-add-input" placeholder="예: 재고 부족으로 쿠폰 노출 축소, 광고 OFF, 이벤트 대상 상품 변경 등"></textarea>
-        <div class="memo-entry-actions">
-          <button type="button" class="btn memo-add-save">저장</button>
-          <button type="button" class="btn memo-add-cancel">취소</button>
-        </div>
-      </div>
-      <div class="memo-body"></div>
-    </div>
-
-    <div class="sec">프로모션 기간 합계 KPI</div>
-    <div class="grid" id="cp-kpi" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));"></div>
-
-    <div class="sec">쿠폰 상세 (발행수 많은 순)</div>
-    <div class="tbl-scroll"><table id="cp-tbl"></table></div>
-
-    <div class="sec">쿠폰별 발행/사용 비교</div>
-    <div class="chartbox"><div class="ch"><canvas id="cp-chart-iss"></canvas></div></div>
-
-    <div class="sec">쿠폰별 CVR · 사용률 비교</div>
-    <div class="chartbox"><div class="ch"><canvas id="cp-chart-cvr"></canvas></div>
-      <div class="legend"><span><i style="border-color:#1D9E75"></i>CVR</span><span><i style="border-color:#7F77DD"></i>사용률 (발행수 무제한 쿠폰 제외)</span></div>
-    </div>
-  </section>
-
-  <p class="muted-note" style="margin-top:30px">데이터 출처: Google Sheets「큐텐_BOH_매출 대시보드 raw시트」→ Apps Script → GitHub(qoo10_dashboard_data/data.json)을 거쳐 자동 갱신됩니다. 숍=「26_제품 일자별」+「25년매출」, SKU=각 SKU 시트(25·26년 A~I / K~S열), 프로모션=「프로모션_항목」. 기준일은 모든 RAW 시트의 마지막 입력일로 자동 인식합니다. 브라우저에서 열면 "GitHub에서 다시 불러오기"로 최신값을 다시 읽습니다. 25년 숍 데이터에는 신규/기존고객 구분이 없어 신규·기존(비중)의 전년비는 표시되지 않습니다.</p>
+  </div>
 </div>
 
-<script src="app.js"></script>
+<script type="module" src="./js/app.js"></script>
 </body>
 </html>

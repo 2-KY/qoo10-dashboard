@@ -1,83 +1,157 @@
-# 라쿠텐 BOH 매출 대시보드
+# Qoo10 매출/프로모션 분석 대시보드
 
-Google Sheets(gviz/JSONP)에서 데이터를 실시간으로 불러오는 정적(static) 웹 대시보드입니다.
-서버/빌드 과정이 없는 순수 HTML+CSS+JS 프로젝트라 Vercel에 그대로 올리면 바로 동작합니다.
+BIOHEAL BOH(바이오힐보) Qoo10 스토어의 매출/프로모션/유입/쿠폰을 분석하는
+내부 업무용 대시보드입니다. 승인된 UI/UX 목업을 기준으로 실제 개발된
+정적 웹 애플리케이션이며, Vercel + GitHub로 배포/관리합니다.
 
-## 파일 구성
+## 1. 아키텍처
 
 ```
-vercel-dashboard/
-├── index.html     # 페이지 구조 (마크업만)
-├── styles.css      # 전체 스타일
-├── app.js          # 전체 로직 + 스냅샷 데이터(fallback) + Google Sheets 실시간 연동
-└── vercel.json     # Vercel 배포 설정 (캐시/보안 헤더)
+Google Sheet (Qoo10 매출 대시보드 Raw)
+        │  (Apps Script가 주기적으로 실행)
+        ▼
+google-apps-script/Code.gs  ── 원본 시트를 읽어 대시보드용 JSON으로 가공
+        │  (GitHub Contents API로 커밋)
+        ▼
+GitHub 저장소 (public-data/data.json)
+        │  (raw.githubusercontent.com, CORS 허용)
+        ▼
+js/data.js  ── fetch로 JSON 로드 (실패 시 data/sample-data.json 폴백)
+        ▼
+js/screens.js + js/app.js ── 화면 렌더링 (순수 정적 HTML/CSS/JS, 빌드 불필요)
+        ▼
+Vercel 정적 배포
 ```
 
-- **데이터 연동은 그대로입니다.** `app.js` 안의 `DOC_ID`, `SHEETS` 상수가 기존과 동일한 Google Sheets 문서/시트를 가리키고, 페이지가 열릴 때 gviz(JSONP) 방식으로 최신 값을 가져옵니다. 시트가 "링크가 있는 모든 사용자"로 공유되어 있어야 하는 조건도 동일합니다.
-- 최초 로딩 시 또는 시트 접근이 실패할 때는 `app.js`에 내장된 스냅샷 데이터로 우선 표시되고, "시트에서 다시 불러오기" 버튼으로 최신값을 다시 받아옵니다.
+기존 Rakuten 대시보드(Apps Script → GitHub data.json → Vercel)와 동일한
+검증된 구조를 그대로 따릅니다. 회사 보안 정책상 브라우저가 Google Sheet에
+직접 접근할 수 없기 때문에, Apps Script가 중간에서 데이터를 가공해 GitHub에
+커밋하고 프론트엔드는 그 결과만 읽는 방식입니다.
 
-## Vercel 배포 방법
+빌드 도구(webpack/vite 등) 없이 순수 ES 모듈만 사용하므로 Vercel은
+별도 빌드 설정 없이 정적 사이트로 바로 배포됩니다.
 
-### 방법 A. Vercel CLI로 바로 배포 (가장 빠름)
+## 2. 폴더 구조
 
-1. [Node.js](https://nodejs.org)가 설치되어 있어야 합니다 (npx 사용).
-2. 터미널에서 이 폴더(`vercel-dashboard`)로 이동합니다.
-3. 아래 명령을 실행합니다.
+```
+qoo10-dashboard/
+├── index.html                  # 앱 셸 (6개 화면의 DOM 컨테이너)
+├── css/styles.css              # 전체 스타일 (승인된 목업 디자인 시스템)
+├── js/
+│   ├── config.js               # 데이터 소스 URL 등 환경설정
+│   ├── data.js                 # GitHub → 샘플 데이터 순으로 fetch
+│   ├── utils.js                # 날짜/구간 집계, 포맷팅 (금번/직전/전년 계산 핵심)
+│   ├── components.js           # 재사용 UI 빌더 (KPI 카드, 트리플 비교 바, 탭 등)
+│   ├── screens.js              # 6개 화면 렌더링 로직
+│   └── app.js                  # 진입점 (네비게이션, 상단 필터, 초기화)
+├── data/sample-data.json       # 로컬 개발/폴백용 샘플 데이터
+├── scripts/generate-sample-data.js  # 샘플 데이터 생성 스크립트
+├── google-apps-script/Code.gs  # Raw 시트 → GitHub JSON 업로드 스크립트
+├── vercel.json
+├── package.json
+└── .gitignore
+```
 
-   ```bash
-   npx vercel
-   ```
+## 3. 로컬 개발
 
-4. 처음 실행하면 Vercel 계정 로그인(이메일 또는 GitHub)을 요청합니다. 안내에 따라 로그인합니다.
-5. 이후 질문에는 기본값(Enter)으로 진행해도 됩니다.
-   - "Set up and deploy?" → Y
-   - "Which scope?" → 본인 계정 선택
-   - "Link to existing project?" → N (처음이라면)
-   - "What's your project's name?" → 원하는 이름 입력 (예: `boh-sales-dashboard`)
-   - "In which directory is your code located?" → `./` (그대로 Enter)
-   - 빌드 설정 관련 질문은 전부 기본값(Enter)으로 진행 (빌드 명령 없음/정적 파일이므로)
-6. 배포가 끝나면 `https://프로젝트이름.vercel.app` 형태의 URL이 출력됩니다. 이 주소로 접속하면 바로 대시보드가 열립니다.
-7. 이후 파일을 수정하고 다시 배포하려면 같은 폴더에서 `npx vercel --prod`를 실행하면 됩니다.
+```bash
+npm install -g serve   # 최초 1회 (또는 npx 사용)
+npm run dev             # http://localhost:3000
+```
 
-### 방법 B. GitHub 연동 (자동 배포, 팀 공유에 유리)
+`js/config.js`의 `GITHUB_DATA_URL`이 비어있으면 자동으로
+`data/sample-data.json`을 사용합니다. 샘플 데이터를 다시 생성하려면:
 
-1. 이 폴더를 GitHub 저장소로 올립니다.
-   ```bash
-   git init
-   git add .
-   git commit -m "초기 대시보드"
-   git branch -M main
-   git remote add origin <본인의 GitHub 저장소 URL>
-   git push -u origin main
-   ```
-2. [vercel.com](https://vercel.com)에 접속해 로그인 후 **"Add New… → Project"**를 클릭합니다.
-3. 방금 만든 GitHub 저장소를 선택하고 **Import**합니다.
-4. Framework Preset은 **"Other"**(정적 사이트)로 자동 인식됩니다. Build Command/Output Directory는 비워둔 채로 **Deploy**를 누릅니다.
-5. 배포가 끝나면 `https://프로젝트이름.vercel.app` 주소가 발급됩니다.
-6. 이후 GitHub에 `git push`만 하면 Vercel이 자동으로 재배포합니다.
+```bash
+npm run generate:sample
+```
 
-### 방법 C. 드래그 앤 드롭 (가장 간단, Git 몰라도 가능)
+## 4. GitHub 연결 & Vercel 배포
 
-1. [vercel.com](https://vercel.com) 로그인 → 대시보드 화면에서 **"Add New… → Project"**
-2. 화면에 나오는 업로드 영역에 `vercel-dashboard` 폴더를 통째로 드래그 앤 드롭합니다.
-3. Deploy를 누르면 끝. URL이 발급됩니다.
+```bash
+git init
+git add .
+git commit -m "init: Qoo10 대시보드 최초 구축"
+git remote add origin https://github.com/{org}/qoo10-dashboard.git
+git push -u origin main
+```
 
-## 신규: 추가 SKU 카드 / 채널 설정 저장용 API 설정 (③⑥탭 재구성용)
+Vercel:
+1. https://vercel.com → New Project → 방금 만든 GitHub 저장소 선택
+2. Framework Preset: **Other** (빌드 명령 없음, Output Directory: `.`)
+3. Deploy
 
-③탭 "추가 SKU 카드"(추가/고정/삭제)와 ⑥탭 "채널 설정"은 브라우저 캐시 삭제·재배포에도 사라지지 않아야 합니다.
+배포 후 실데이터를 연결하려면 `js/config.js`의 `GITHUB_DATA_URL`을
+Apps Script가 커밋할 GitHub raw JSON 경로로 채워 넣고 다시 배포하세요.
+예:
+```js
+GITHUB_DATA_URL: "https://raw.githubusercontent.com/{org}/qoo10-dashboard/main/public-data/data.json"
+```
 
-처음에는 Apps Script를 웹 앱으로 배포해 대시보드가 직접 호출하는 구조로 만들었지만, **회사 Google Workspace 보안 정책상 Apps Script 웹 앱을 "모든 사용자(Anyone)"로 배포할 수 없어**(선택 가능한 옵션이 "나만"/"조직 전체"뿐) 익명 방문자가 보는 이 공개 대시보드에서는 그 방식이 동작하지 않습니다. 그래서 쓰기 경로를 **이 Vercel 프로젝트 자체의 서버리스 함수(`api/cards.js`)** 로 옮겼습니다 — 대시보드가 같은 오리진(`/api/cards`)으로 호출하므로 CORS/로그인 문제가 없고, 이 함수만 `GITHUB_TOKEN`을 서버 쪽 환경변수로 들고 있다가 GitHub의 `usercards.json` 파일(Apps Script가 쓰는 `data.json`과는 분리된 별도 파일)을 직접 커밋합니다.
+## 5. Google Apps Script 설정 (실데이터 연동)
 
-설정 방법(한 번만 하면 됨):
+1. "Qoo10 매출 대시보드 Raw" 스프레드시트 열기 → 확장 프로그램 → Apps Script
+2. `google-apps-script/Code.gs` 내용을 붙여넣기
+3. 프로젝트 설정 → 스크립트 속성에 아래 값 추가:
+   - `GITHUB_TOKEN` — repo 쓰기 권한이 있는 GitHub Personal Access Token
+   - `GITHUB_REPO` — 예: `your-org/qoo10-dashboard`
+   - `GITHUB_BRANCH` — 예: `main`
+   - `GITHUB_DATA_PATH` — 예: `public-data/data.json`
+4. `syncToGitHub` 함수 실행 권한 승인 (최초 1회 수동 실행)
+5. 트리거 등록: `syncToGitHub`를 시간 기반(예: 1시간마다)으로 실행
 
-1. GitHub → Settings → Developer settings → **Fine-grained personal access token** 발급 — Repository access를 `2-KY/qoo10_dashboard_data` 저장소 **하나만** 선택하고, Permissions는 **Contents: Read and write** 만 부여합니다(그 외 권한 불필요 — 유출되더라도 이 저장소 하나만 영향받도록 최소 권한으로 발급).
-2. Vercel 프로젝트(`qoo10-dashboard`) → Settings → **Environment Variables** → `GITHUB_TOKEN` 이름으로 위 토큰 값을 추가합니다(Production 환경에 최소 1개 필요).
-3. 다시 배포합니다(`npx vercel --prod` 또는 GitHub push로 자동 배포) — 이후 `/api/cards`가 이 환경변수를 읽어 동작합니다.
+## 6. 데이터 스키마 계약 (data.json)
 
-Apps Script 쪽은 이제 이 기능과 무관합니다(기존 `GITHUB_TOKEN` 스크립트 속성·10분 트리거는 매출 데이터 동기화용으로 그대로 유지). `usercards.json` 파일은 첫 카드/채널을 추가하는 순간 저장소에 자동으로 생성됩니다.
+```jsonc
+{
+  "generatedAt": "ISO 8601",
+  "isSampleData": false,
+  "meta": { "mainSkus": [{ "code": "...", "name": "..." }, ...] },
+  "promotions": [
+    {
+      "id": "2026-05-megawari",
+      "name": "메가와리", "year": 2026, "month": 5,
+      "current":  { "start": "2026-05-20", "end": "2026-05-26" },
+      "previous": { "start": "2026-03-18", "end": "2026-03-24", "label": "마라톤" },
+      "yoy":      { "start": "2025-05-21", "end": "2025-05-27" },
+      "isHalfDayFirst": true,
+      "mainSkus": ["코드1", "코드2", ...]
+    }
+  ],
+  "monthlyTargets": [{ "year": 2026, "month": 1, "target": 55000000 }, ...],
+  "shopDaily": [
+    { "date": "2026-01-01", "sales": 0, "orders": 0, "qty": 0, "uv": 0, "aov": 0,
+      "newCustomers": 0, "existingCustomers": 0, "newRatio": 0, "existingRatio": 0,
+      "totalInflow": 0, "internalInflow": 0, "externalInflow": 0 }
+  ],
+  "skuDaily": { "상품코드": [ /* shopDaily와 동일한 행 구조 */ ] },
+  "coupons": { "confirmed": false, "note": "...", "items": [] }
+}
+```
+`js/utils.js`의 모든 집계 함수(`aggregateRange`, `aggregateMonth`, `aggregateByDayOffset` 등)는
+이 스키마를 전제로 동작합니다. Code.gs가 이 형태로 JSON을 생성하기만 하면
+프론트엔드 코드는 수정할 필요가 없습니다.
 
-## 배포 후 확인 사항
+## 7. 확인이 필요한 사항 (KY 확인 대기)
 
-- 발급받은 URL로 접속했을 때 화면이 비어 보이거나 "시트 연동 실패"가 뜨면 Google Sheets 공유 설정("링크가 있는 모든 사용자" 뷰어 권한)을 다시 확인하세요.
-- 커스텀 도메인을 쓰고 싶다면 Vercel 프로젝트 설정 → **Domains**에서 원하는 도메인을 연결할 수 있습니다.
-- 이후 지표/탭을 추가로 수정할 때는 `app.js`(로직)와 `index.html`(마크업), `styles.css`(디자인) 중 해당하는 파일만 수정하면 됩니다.
+목업 단계에서 안내드렸던 항목이며, 실데이터 연동 전 확정이 필요합니다.
+`Code.gs`에 `TODO(확인 필요)` 주석으로도 표시해 두었습니다.
+
+| # | 항목 | 현재 구현 방식(임시) |
+|---|---|---|
+| 1 | 연간/월별 화면처럼 특정 프로모션에 종속되지 않는 화면의 "메인 SKU 마스터" 기준 | 전체 프로모션 P~Q열 SKU의 합집합 사용 |
+| 2 | 신규/기존 고객 데이터 소스(SHOP_매출 vs 26)SHOP_고객현황) | SHOP_매출을 숍 전체 소스로 사용, 상품별 고객 Raw는 SKU 매칭용으로만 사용 |
+| 3 | 26)SHOP_유입현황의 상품코드 컬럼명 | `Code.gs`의 `readInflowByProduct_`에 TODO로 표시 — 실제 헤더명 확인 후 한 줄만 수정하면 됨 |
+| 4 | 프로모션 일별 분석의 "N일차" 정의(직전/전년 기간 길이가 다를 경우) | 각 기간 시작일 기준 상대 offset으로 정렬 (기간 길이가 짧으면 뒷부분은 데이터 없음) |
+| 5 | 쿠폰 Raw 컬럼 구조 | 미확인 — `coupons.confirmed:false`로 두고 프론트에 경고 배너 표시 중 |
+| 6 | 월별 대시보드에서 해당 월에 프로모션이 없을 때의 직전/전년 비교 기준 | 캘린더 기준(전월/전년 동월)으로 폴백, 화면에 "캘린더 기준" 라벨로 명시 |
+| 7 | 프로모션 비교/일별 분석에서 "고정(pin)"한 추가 상품의 영구 저장 방식 | 현재는 브라우저 세션 내 메모리에만 유지(새로고침 시 초기화). 영구 저장이 필요하면 GitHub 데이터에 `pinnedProducts` 배열을 추가하거나, Vercel KV/Edge Config 등 별도 저장소 연동이 필요 — 방식 결정 후 추가 개발 필요 |
+| 8 | 메가와리 "0.5일차" 같은 half-day 규칙을 시트 컬럼으로 관리할지, 프로모션명 하드코딩으로 관리할지 | 현재 `Code.gs`에 프로모션명 매칭(`HALF_DAY_PROMO_NAMES`)으로 임시 구현 |
+
+## 8. 다음 단계 제안
+
+1. 위 8개 항목 확인
+2. `Code.gs`의 `TODO` 부분(특히 시트 헤더명)을 실제 시트에 맞게 조정
+3. Apps Script 스크립트 속성에 GitHub 토큰 등록 후 `syncToGitHub` 1회 수동 실행
+4. `js/config.js`의 `GITHUB_DATA_URL` 연결 후 Vercel 재배포
+5. 실데이터로 6개 화면 전체 검증

@@ -1,0 +1,11 @@
+{
+  "name": "qoo10-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Qoo10 매출/프로모션 분석 대시보드 (BIOHEAL BOH)",
+  "scripts": {
+    "dev": "npx serve . -l 3000",
+    "generate:sample": "node scripts/generate-sample-data.js"
+  },
+  "license": "UNLICENSED"
+}
