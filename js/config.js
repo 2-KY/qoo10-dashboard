@@ -10,7 +10,7 @@
  *    예: https://raw.githubusercontent.com/{org}/{repo}/main/public-data/data.json
  */
 export const CONFIG = {
-  GITHUB_DATA_URL: "", // TODO: 실제 데이터 저장소 연결 시 채워넣기
+  GITHUB_DATA_URL: "https://raw.githubusercontent.com/2-KY/qoo10-dashboard/main/public-data/data.json",
   LOCAL_SAMPLE_URL: "./data/sample-data.json",
   FETCH_TIMEOUT_MS: 6000,
   APP_NAME: "Qoo10 Analytics",

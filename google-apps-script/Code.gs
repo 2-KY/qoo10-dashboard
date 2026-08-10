@@ -26,7 +26,7 @@ function getConfig_() {
   const props = PropertiesService.getScriptProperties();
   return {
     githubToken: props.getProperty("GITHUB_TOKEN"),
-    githubRepo: props.getProperty("GITHUB_REPO") || "your-org/qoo10-dashboard",
+    githubRepo: props.getProperty("GITHUB_REPO") || "2-KY/qoo10-dashboard",
     githubBranch: props.getProperty("GITHUB_BRANCH") || "main",
     githubDataPath: props.getProperty("GITHUB_DATA_PATH") || "public-data/data.json",
   };
@@ -72,11 +72,11 @@ function buildDashboardData_(ss) {
 //    현재 구현: 전체 프로모션 행의 P~Q열 SKU 목록 합집합(중복 제거)을 사용.
 // --------------------------------------------------------------------
 function readMainSkus_(ss) {
-  const sheet = ss.getSheetByName("프로모션_항목");
+  const sheet = requireSheet_(ss, "프로모션_항목");
   const values = sheet.getDataRange().getValues();
   const header = values[0];
-  const colP = header.indexOf("메인 상품코드"); // P열 헤더명은 실제 시트에 맞게 조정
-  const colQ = header.indexOf("메인 상품명");
+  const colP = requireCol_(header, "메인상품코드", "프로모션_항목");
+  const colQ = requireCol_(header, "메인상품명", "프로모션_항목");
 
   const seen = {};
   const list = [];
@@ -96,16 +96,17 @@ function readMainSkus_(ss) {
 //    프로모션명으로 하드코딩 매칭할지 결정 필요. 아래는 이름 매칭 예시.
 // --------------------------------------------------------------------
 function readPromotions_(ss) {
-  const sheet = ss.getSheetByName("프로모션_항목");
+  const sheet = requireSheet_(ss, "프로모션_항목");
   const values = sheet.getDataRange().getValues();
   const header = values[0];
-  const idx = (name) => header.indexOf(name);
+  const idx = (name) => requireCol_(header, name, "프로모션_항목");
 
   const cName = idx("프로모션명"), cYear = idx("연도"), cMonth = idx("월"),
     cStart = idx("시작일"), cEnd = idx("종료일"),
     cPrevStart = idx("직전 시작일"), cPrevEnd = idx("직전 종료일"),
     cYoyStart = idx("전년 시작일"), cYoyEnd = idx("전년 종료일"),
-    cNote = idx("비고"), cMainCode = idx("메인 상품코드");
+    cMainCode = idx("메인상품코드");
+  const cNote = findColTrim_(header, "비고"); // 선택 항목 — 없어도 진행
 
   // 프로모션명 -> 해당 행들의 메인 SKU 코드 집합
   const skusByPromoRow = {};
@@ -151,12 +152,12 @@ function readPromotions_(ss) {
 // 2-3. 월별 목표매출 (L~N열)
 // --------------------------------------------------------------------
 function readMonthlyTargets_(ss) {
-  const sheet = ss.getSheetByName("프로모션_항목");
+  const sheet = requireSheet_(ss, "프로모션_항목");
   const values = sheet.getDataRange().getValues();
   const header = values[0];
-  const cYear = header.indexOf("연도_목표") !== -1 ? header.indexOf("연도_목표") : header.indexOf("연도");
-  const cMonth = header.indexOf("월_목표") !== -1 ? header.indexOf("월_목표") : header.indexOf("월");
-  const cTarget = header.indexOf("월 목표 매출");
+  const cYear = findColTrim_(header, "연도_목표") !== -1 ? findColTrim_(header, "연도_목표") : findColTrim_(header, "연도");
+  const cMonth = findColTrim_(header, "월_목표") !== -1 ? findColTrim_(header, "월_목표") : findColTrim_(header, "월");
+  const cTarget = requireCol_(header, "월 목표 매출", "프로모션_항목");
 
   const seen = {};
   const out = [];
@@ -173,10 +174,10 @@ function readMonthlyTargets_(ss) {
 
 // --------------------------------------------------------------------
 // 2-4. 숍 전체 일별 데이터
-// SHOP_매출 + 26)/25)SHOP_유입현황 + 26)/25)SHOP_고객현황 을 날짜 기준으로 결합
+// SHOP_매출 + 26)/25)SHOP_유입현황 을 날짜 기준으로 결합
 // --------------------------------------------------------------------
 function buildShopDaily_(ss) {
-  const salesRows = readShopSalesSheet_(ss, "SHOP_매출"); // date -> {sales, orders, qty, uv, aov, newCustomers, existingCustomers}
+  const salesRows = readShopSalesSheet_(ss, "SHOP_매출"); // date -> {sales, orders, qty, uv, newCustomers, existingCustomers}
   const inflow26 = readInflowSheet_(ss, "26)SHOP_유입현황");
   const inflow25 = readInflowSheet_(ss, "25)SHOP_유입현황");
   const inflowByDate = Object.assign({}, inflow25, inflow26);
@@ -202,29 +203,80 @@ function buildShopDaily_(ss) {
 }
 
 // SHOP_매출 시트에서 날짜별 지표 추출
-// ⚠️ TODO: 실제 컬럼명이 스펙과 다를 경우 아래 헤더 문자열을 시트에 맞게 조정하세요.
+// 실제 구조 확인됨: 1행 그룹 헤더가 병합 셀 — "구매자결제일" / "[25년] 숍 전체" / "구매자결제일" / "[26년] 숍 전체"
+// (병합된 셀은 시작 셀에만 값이 있고 나머지는 빈 문자열로 읽히므로, 왼쪽 값을 이어받아 채운다)
+// 2행이 실제 하위 헤더(매출(GMV), 주문건수, 판매수량, UV, 신규고객, 기존고객 등) — 연도 블록마다 동일한 이름이
+// 반복되므로, 반드시 각 블록의 열 범위 안에서만 헤더를 찾아야 한다(전역 탐색은 항상 첫 블록만 찾게 됨).
+// 3행부터 실데이터. 시트 자체(병합/블록 구조)는 변경하지 않는다.
 function readShopSalesSheet_(ss, sheetName) {
-  const sheet = ss.getSheetByName(sheetName);
+  const sheet = requireSheet_(ss, sheetName);
   const values = sheet.getDataRange().getValues();
-  const header = values[0];
-  const idx = (name) => header.indexOf(name);
-  const cDate = idx("날짜"), cGmv = idx("GMV"), cOrders = idx("주문건수"), cQty = idx("판매수량"),
-    cUv = idx("UV"), cNew = idx("신규고객"), cExisting = idx("기존고객");
+  if (values.length < 3) {
+    throw new Error('시트 "' + sheetName + '"의 행이 3행 미만입니다(1행 그룹헤더/2행 하위헤더/3행~ 데이터 구조 기대). 실제 값: ' + JSON.stringify(values));
+  }
+  const groupRow = values[0];
+  const subRow = values[1];
+  const dataRows = values.slice(2);
+
+  // 병합 셀 carry-forward: 빈 칸은 왼쪽에서 가장 최근에 나온 값을 이어받음 (앞뒤 공백은 normHeader_로 제거)
+  const filledGroup = [];
+  let last = "";
+  for (let c = 0; c < groupRow.length; c++) {
+    const v = normHeader_(groupRow[c]);
+    if (v) last = v;
+    filledGroup.push(last);
+  }
+
+  // "구매자결제일" 열 = 각 연도 블록의 시작점(날짜 열)
+  const blockStarts = [];
+  for (let c = 0; c < groupRow.length; c++) {
+    if (normHeader_(groupRow[c]) === "구매자결제일") blockStarts.push(c);
+  }
+  if (blockStarts.length === 0) {
+    throw new Error('시트 "' + sheetName + '"에서 "구매자결제일" 열을 찾을 수 없습니다. 1행: ' + JSON.stringify(groupRow));
+  }
 
   const out = {};
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i];
-    if (!row[cDate]) continue;
-    const date = fmtDate_(row[cDate]);
-    out[date] = {
-      sales: Number(row[cGmv]) || 0,
-      orders: Number(row[cOrders]) || 0,
-      qty: Number(row[cQty]) || 0,
-      uv: Number(row[cUv]) || 0,
-      newCustomers: Number(row[cNew]) || 0,
-      existingCustomers: Number(row[cExisting]) || 0,
+  blockStarts.forEach((dateCol, bi) => {
+    const blockEnd = bi + 1 < blockStarts.length ? blockStarts[bi + 1] : groupRow.length;
+    const groupLabel = filledGroup[dateCol + 1] || filledGroup[dateCol] || ("블록 " + (bi + 1));
+
+    // 이 블록(dateCol+1 ~ blockEnd-1) 범위 안에서만 하위 헤더를 탐색 (양쪽 다 trim 후 비교)
+    const findColInBlock = (name) => {
+      const target = normHeader_(name);
+      for (let c = dateCol + 1; c < blockEnd; c++) {
+        if (normHeader_(subRow[c]) === target) return c;
+      }
+      throw new Error(
+        '시트 "' + sheetName + '"의 "' + groupLabel + '" 블록에서 헤더 "' + name +
+        '"를 찾을 수 없습니다. 실제 2행(해당 블록): ' + JSON.stringify(subRow.slice(dateCol, blockEnd))
+      );
     };
-  }
+
+    const cGmv = findColInBlock("매출(GMV)");
+    const cOrders = findColInBlock("주문건수");
+    const cQty = findColInBlock("판매수량");
+    const cUv = findColInBlock("UV");
+    const cNew = findColInBlock("신규고객");
+    const cExisting = findColInBlock("기존고객");
+
+    dataRows.forEach((row) => {
+      const dateVal = row[dateCol];
+      // 날짜 열에 실제 Date가 아닌 값(예: "2025.1" 같은 월 소계 행의 텍스트)이 섞여 있으므로
+      // 진짜 날짜 셀만 일별 데이터로 인정하고 나머지는 건너뛴다 (실데이터에서 확인된 케이스)
+      if (!(dateVal instanceof Date)) return;
+      const date = fmtDate_(dateVal);
+      out[date] = {
+        sales: Number(row[cGmv]) || 0,
+        orders: Number(row[cOrders]) || 0,
+        qty: Number(row[cQty]) || 0,
+        uv: Number(row[cUv]) || 0,
+        newCustomers: Number(row[cNew]) || 0,
+        existingCustomers: Number(row[cExisting]) || 0,
+      };
+    });
+  });
+
   return out;
 }
 
@@ -235,17 +287,21 @@ function readInflowSheet_(ss, sheetName) {
   if (!sheet) return {};
   const values = sheet.getDataRange().getValues();
   const header = values[0];
-  const idx = (name) => header.indexOf(name);
+  const idx = (name) => findColTrim_(header, name);
   const cDate = idx("날짜");
   const cTotal = idx("유입채널(PV) : 합계(총페이지뷰)");
   const cExt1 = idx("유입채널(PV) : 외부유입_전체");
   const cExt2 = idx("유입채널(PV) : URL직접입력");
   const cExt3 = idx("유입채널(PV) : 기타");
+  if (cDate === -1 || cTotal === -1) {
+    Logger.log('[readInflowSheet_] "' + sheetName + '" 헤더 불일치로 유입 데이터를 건너뜁니다(0으로 폴백). 실제 헤더: ' + JSON.stringify(header));
+    return {};
+  }
 
   const out = {};
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
-    if (!row[cDate]) continue;
+    if (!(row[cDate] instanceof Date)) continue; // 월 소계 등 텍스트 날짜 행 제외
     const date = fmtDate_(row[cDate]);
     const total = Number(row[cTotal]) || 0;
     const external = (Number(row[cExt1]) || 0) + (Number(row[cExt2]) || 0) + (Number(row[cExt3]) || 0);
@@ -257,9 +313,7 @@ function readInflowSheet_(ss, sheetName) {
 // --------------------------------------------------------------------
 // 2-5. SKU별 일별 데이터
 // 26)/25)SHOP_거래현황(매출/수량) + 상품별 고객 Raw(신규/기존) +
-// 26)/25)SHOP_유입현황의 상품코드 컬럼(유입) 을 상품코드 기준으로 결합
-// ⚠️ TODO: 유입현황 시트에서 상품코드가 어느 컬럼에 있는지 실제 헤더 확인 후
-//    readInflowByProduct_ 의 컬럼명을 조정하세요.
+// 26)/25)SHOP_유입현황의 "상품번호" 컬럼(유입) 을 상품코드 기준으로 결합
 // --------------------------------------------------------------------
 function buildSkuDaily_(ss, mainSkus) {
   const trade26 = readTradeSheet_(ss, "26)SHOP_거래현황");
@@ -267,6 +321,14 @@ function buildSkuDaily_(ss, mainSkus) {
   const customerByProduct = readCustomerByProductSheets_(ss, mainSkus);
   const inflowByProduct26 = readInflowByProduct_(ss, "26)SHOP_유입현황");
   const inflowByProduct25 = readInflowByProduct_(ss, "25)SHOP_유입현황");
+
+  const tradeCodes = uniq_(Object.keys(trade25).concat(Object.keys(trade26)));
+  const mainCodes = mainSkus.map((s) => s.code);
+  const matchedCodes = mainCodes.filter((c) => tradeCodes.indexOf(c) !== -1);
+  Logger.log(
+    '[buildSkuDaily_] 메인 SKU ' + mainCodes.length + '개 중 거래현황에서 매칭된 코드 ' + matchedCodes.length + '개. ' +
+    '메인 SKU 코드: ' + JSON.stringify(mainCodes) + ' / 거래현황 코드 샘플(최대10개): ' + JSON.stringify(tradeCodes.slice(0, 10))
+  );
 
   const out = {};
   mainSkus.forEach((sku) => {
@@ -301,14 +363,19 @@ function readTradeSheet_(ss, sheetName) {
   if (!sheet) return {};
   const values = sheet.getDataRange().getValues();
   const header = values[0];
-  const idx = (name) => header.indexOf(name);
+  const idx = (name) => requireCol_(header, name, sheetName);
   const cDate = idx("날짜"), cCode = idx("판매자상품코드"), cSalesAdj = idx("취소분반영 거래금액"), cQtyAdj = idx("취소분반영 거래상품수량");
 
   const out = {}; // code -> date -> {sales, qty}
+  let scanned = 0, matched = 0;
+  const sampleCodes = [];
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
+    scanned++;
     const code = String(row[cCode] || "");
-    if (!code || !row[cDate]) continue;
+    if (sampleCodes.length < 5 && code) sampleCodes.push(code);
+    if (!code || !(row[cDate] instanceof Date)) continue; // 월 소계 등 텍스트 날짜 행 제외
+    matched++;
     const date = fmtDate_(row[cDate]);
     if (!out[code]) out[code] = {};
     const prevSales = (out[code][date] && out[code][date].sales) || 0;
@@ -318,6 +385,7 @@ function readTradeSheet_(ss, sheetName) {
       qty: prevQty + (Number(row[cQtyAdj]) || 0),
     };
   }
+  Logger.log('[readTradeSheet_] "' + sheetName + '" ' + scanned + '행 스캔, ' + matched + '행 반영. 판매자상품코드 샘플: ' + JSON.stringify(sampleCodes));
   return out;
 }
 
@@ -335,13 +403,13 @@ function readCustomerByProductSheets_(ss, mainSkus) {
 
     const values = sheet.getDataRange().getValues();
     const header = values[0];
-    const idx = (n) => header.indexOf(n);
+    const idx = (n) => requireCol_(header, n, name);
     const cDate = idx("날짜"), cNew = idx("거래고객_신규고객수"), cExisting = idx("거래고객_기존고객수");
 
     const byDate = {};
     for (let i = 1; i < values.length; i++) {
       const row = values[i];
-      if (!row[cDate]) continue;
+      if (!(row[cDate] instanceof Date)) continue; // 월 소계 등 텍스트 날짜 행 제외
       const date = fmtDate_(row[cDate]);
       byDate[date] = {
         newCustomers: Number(row[cNew]) || 0,
@@ -353,28 +421,26 @@ function readCustomerByProductSheets_(ss, mainSkus) {
   return out;
 }
 
-// ⚠️ TODO(확인 필요): 26)/25)SHOP_유입현황 시트의 상품코드 컬럼명 확정 후 구현.
-// KY 확인: "26)SHOP_유입현황에 상품번호(상품코드)도 있다"고 하셨으므로, 해당
-// 컬럼명을 아래 cCode 자리에 채워 넣으면 SKU별 유입 실측 데이터를 만들 수 있습니다.
+// 26)/25)SHOP_유입현황 시트에는 "상품번호" 컬럼이 실제로 존재함(확인됨) — 이 컬럼 기준으로
+// SKU별 유입(PV)을 집계한다. 시트 자체가 없는 경우(예: 25년 시트 미존재)만 빈 결과로 폴백.
 function readInflowByProduct_(ss, sheetName) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return {};
   const values = sheet.getDataRange().getValues();
   const header = values[0];
-  const idx = (name) => header.indexOf(name);
+  const idx = (name) => requireCol_(header, name, sheetName);
   const cDate = idx("날짜");
-  const cCode = idx("상품번호"); // TODO: 실제 헤더명으로 교체
+  const cCode = idx("상품번호");
   const cTotal = idx("유입채널(PV) : 합계(총페이지뷰)");
   const cExt1 = idx("유입채널(PV) : 외부유입_전체");
   const cExt2 = idx("유입채널(PV) : URL직접입력");
   const cExt3 = idx("유입채널(PV) : 기타");
-  if (cCode === -1) return {}; // 상품코드 컬럼을 아직 못 찾았으면 빈 결과 반환 (숍 레벨로 폴백)
 
   const out = {}; // code -> date -> {...}
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
     const code = String(row[cCode] || "");
-    if (!code || !row[cDate]) continue;
+    if (!code || !(row[cDate] instanceof Date)) continue; // 월 소계 등 텍스트 날짜 행 제외
     const date = fmtDate_(row[cDate]);
     const total = Number(row[cTotal]) || 0;
     const external = (Number(row[cExt1]) || 0) + (Number(row[cExt2]) || 0) + (Number(row[cExt3]) || 0);
@@ -450,6 +516,37 @@ function pushToGitHub_(payload) {
 // ====================================================================
 // 4. 유틸
 // ====================================================================
+// 시트가 없으면 실제 시트 목록을 담아 에러를 던짐 (구조 확인 없이 바로 실행해도
+// 첫 실패 지점의 에러 메시지만으로 실제 시트명을 알 수 있게 하기 위함)
+function requireSheet_(ss, name) {
+  const sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    const all = ss.getSheets().map(function (s) { return s.getName(); });
+    throw new Error('시트 "' + name + '"를 찾을 수 없습니다. 실제 시트 목록: ' + JSON.stringify(all));
+  }
+  return sheet;
+}
+// 헤더 문자열 정규화 — 실제 시트 헤더에 섞여 있는 앞뒤 공백 때문에 매칭이
+// 깨지지 않도록, 헤더를 찾는 모든 곳은 이 함수를 거쳐 trim 후 비교한다.
+function normHeader_(v) {
+  return String(v === null || v === undefined ? "" : v).trim();
+}
+// header 배열에서 name과 trim 후 일치하는 첫 열 인덱스 (없으면 -1)
+function findColTrim_(header, name) {
+  const target = normHeader_(name);
+  for (let i = 0; i < header.length; i++) {
+    if (normHeader_(header[i]) === target) return i;
+  }
+  return -1;
+}
+// 헤더에 컬럼이 없으면 실제 헤더 배열을 담아 에러를 던짐 (위와 같은 이유)
+function requireCol_(header, name, sheetName) {
+  const i = findColTrim_(header, name);
+  if (i === -1) {
+    throw new Error('시트 "' + sheetName + '"에서 헤더 "' + name + '"를 찾을 수 없습니다. 실제 헤더: ' + JSON.stringify(header));
+  }
+  return i;
+}
 function fmtDate_(value) {
   if (value instanceof Date) {
     return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd");
