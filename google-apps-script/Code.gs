@@ -397,6 +397,29 @@ function readInflowSheet_(ss, sheetName) {
     ' URL직접입력:' + cExt2 + ' 기타:' + cExt3 + ' / 데이터 3행 샘플: ' +
     JSON.stringify(values.slice(2, 5).map((r) => [r[cDate], r[cTotal], r[cExt1], r[cExt2], r[cExt3]]))
   );
+  Logger.log('[readInflowSheet_] "' + sheetName + '" 전체 헤더 행(1행): ' + JSON.stringify(header));
+
+  // 검증용: 2026-07-01~09(3D 크림리필 메가포 기간) 날짜에 해당하는 실제 행을 전부 덤프.
+  // 이 시트가 (날짜,상품)별로 여러 행을 갖고 있다면(=상품별 세부 시트라면), 같은 날짜가
+  // 여러 번 나올 것이고, 현재 로직(날짜 키로 덮어쓰기)은 그중 마지막 행만 남기고 나머지를
+  // 잃어버리는 문제가 있을 수 있다 — 컬럼 매핑 로직은 건드리지 않고 사실 확인만 한다.
+  const testRows = [];
+  const dateCounts = {};
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    if (!(row[cDate] instanceof Date)) continue;
+    const dateStr = fmtDate_(row[cDate]);
+    if (dateStr >= "2026-07-01" && dateStr <= "2026-07-09") {
+      dateCounts[dateStr] = (dateCounts[dateStr] || 0) + 1;
+      if (testRows.length < 30) {
+        testRows.push({ row: i + 1, date: dateStr, total: row[cTotal], ext1: row[cExt1], ext2: row[cExt2], ext3: row[cExt3] });
+      }
+    }
+  }
+  Logger.log(
+    '[readInflowSheet_] "' + sheetName + '" 2026-07-01~09 날짜별 행 개수(1보다 크면 날짜당 여러 행 존재 = 상품별 세부 시트일 가능성): ' +
+    JSON.stringify(dateCounts) + ' / 실제 행 샘플(최대 30개): ' + JSON.stringify(testRows)
+  );
 
   const out = {};
   for (let i = 1; i < values.length; i++) {
@@ -701,6 +724,29 @@ function readInflowByProduct_(ss, sheetName) {
   const cExt1 = idx("유입채널(PV) : 외부유입_전체");
   const cExt2 = idx("유입채널(PV) : URL직접입력");
   const cExt3 = idx("유입채널(PV) : 기타");
+  Logger.log(
+    '[readInflowByProduct_] "' + sheetName + '" 컬럼 위치 — 날짜:' + cDate + ' 상품번호:' + cCode +
+    ' 합계:' + cTotal + ' 외부전체:' + cExt1 + ' URL직접입력:' + cExt2 + ' 기타:' + cExt3
+  );
+
+  // 검증용: SKU=1043733766(3D 크림리필), 2026-07-01~09 원본 행을 전부 덤프하고,
+  // (code,date) 조합이 중복되는지(같은 날짜에 같은 상품 행이 2개 이상)도 같이 확인한다.
+  const testRows = [];
+  const codeDateCounts = {};
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const code = String(row[cCode] || "");
+    if (code !== "1043733766" || !(row[cDate] instanceof Date)) continue;
+    const dateStr = fmtDate_(row[cDate]);
+    if (dateStr >= "2026-07-01" && dateStr <= "2026-07-09") {
+      codeDateCounts[dateStr] = (codeDateCounts[dateStr] || 0) + 1;
+      testRows.push({ row: i + 1, date: dateStr, total: row[cTotal], ext1: row[cExt1], ext2: row[cExt2], ext3: row[cExt3] });
+    }
+  }
+  Logger.log(
+    '[readInflowByProduct_] "' + sheetName + '" SKU=1043733766 2026-07-01~09 날짜별 행 개수(1보다 크면 (상품,날짜) 중복 존재): ' +
+    JSON.stringify(codeDateCounts) + ' / 실제 행: ' + JSON.stringify(testRows)
+  );
 
   const out = {}; // code -> date -> {...}
   for (let i = 1; i < values.length; i++) {
