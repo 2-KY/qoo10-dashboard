@@ -482,22 +482,18 @@ export function renderDaily(data, promoId) {
 /* ================================================================
    5. 유입 분석 (숍 전체 / 메인 SKU / 추가 상품 선택 가능)
    ================================================================ */
-const CHANNEL_DIST = {
-  internal: [
-    { name: "검색결과", r: 0.312 }, { name: "프로모션페이지", r: 0.241 }, { name: "상품상세페이지", r: 0.196 },
-    { name: "홈(메인페이지)", r: 0.141 }, { name: "셀러샵 / 기획전", r: 0.070 },
-    { name: "위시리스트 / 최근본상품", r: 0.026 }, { name: "기타 (베스트셀러/카테고리 등)", r: 0.014 },
-  ],
-  external: [
-    { name: "Google", r: 0.350 }, { name: "Instagram", r: 0.283 }, { name: "YouTube 연동 / 기타 SNS", r: 0.153 },
-    { name: "URL 직접입력", r: 0.113 }, { name: "야후 (Yahoo)", r: 0.068 },
-    { name: "카카쿠 (가격비교)", r: 0.022 }, { name: "X (트위터) / LINE / 기타", r: 0.012 },
-  ],
-};
-function buildChannelBreakdown(internalTotal, externalTotal) {
+// 원본에서 실제로 제공하는 세부 채널은 외부유입의 "URL직접입력"/"기타" 2개뿐이다
+// (내부유입 세부 채널은 원본에 컬럼이 없어 데이터가 없음 — 예전에는 고정 비율로 가짜
+// 수치를 만들어 보여줬으나, 실제 원본에 없는 데이터라 제거함).
+function buildChannelBreakdown(cur) {
+  const etcExternal = Math.max(0, cur.externalInflow - cur.externalUrlDirect - cur.externalEtc);
   return {
-    internal: CHANNEL_DIST.internal.map((c) => ({ name: c.name, val: Math.round(internalTotal * c.r) })),
-    external: CHANNEL_DIST.external.map((c) => ({ name: c.name, val: Math.round(externalTotal * c.r) })),
+    internal: [], // 원본에 내부유입 세부 채널 컬럼이 없음 — 아코디언에 항목 없이 합계만 표시
+    external: [
+      { name: "URL 직접입력", val: cur.externalUrlDirect },
+      { name: "기타", val: cur.externalEtc },
+      { name: "기타 외부(미분류)", val: etcExternal },
+    ],
   };
 }
 
@@ -569,7 +565,7 @@ export function renderInflow(data, promoId) {
         <div class="flow-bar-outer"><div class="flow-bar-ex" style="width:${cur.externalRatio}%"></div></div>
       </div>`;
 
-    const breakdown = buildChannelBreakdown(cur.internalInflow, cur.externalInflow);
+    const breakdown = buildChannelBreakdown(cur);
     renderAccordion($("inflow-accordion"), [
       { key: "internal", name: "내부 유입", color: "var(--cur)", val: cur.internalInflow, share: Math.round(cur.internalRatio), children: breakdown.internal },
       { key: "external", name: "외부 유입", color: "var(--prev)", val: cur.externalInflow, share: Math.round(cur.externalRatio), children: breakdown.external },

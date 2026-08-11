@@ -180,7 +180,7 @@ function buildShopDaily_(ss) {
     .sort()
     .forEach((date) => {
       const s = salesRows[date];
-      const inf = inflowByDate[date] || { totalInflow: 0, internalInflow: 0, externalInflow: 0 };
+      const inf = inflowByDate[date] || { totalInflow: 0, internalInflow: 0, externalInflow: 0, externalUrlDirect: 0, externalEtc: 0 };
       const totalCustomers = s.newCustomers + s.existingCustomers;
       out.push({
         date: date,
@@ -190,6 +190,7 @@ function buildShopDaily_(ss) {
         newRatio: totalCustomers ? (s.newCustomers / totalCustomers) * 100 : 0,
         existingRatio: totalCustomers ? (s.existingCustomers / totalCustomers) * 100 : 0,
         totalInflow: inf.totalInflow, internalInflow: inf.internalInflow, externalInflow: inf.externalInflow,
+        externalUrlDirect: inf.externalUrlDirect || 0, externalEtc: inf.externalEtc || 0,
       });
     });
   return out;
@@ -279,7 +280,15 @@ function readShopSalesSheet_(ss, sheetName) {
 }
 
 // 26)/25)SHOP_유입현황 시트에서 날짜별 전체/내부/외부 유입 계산
-// 전체유입 = BD열, 외부유입 = AR+BB+BC열, 내부유입 = 전체 - 외부
+// ⚠️ 수정(확인 필요, 원본 재검증 권장): "외부유입_전체"는 헤더 이름상 이미 외부유입의
+// 합계로 보이는데도 기존 코드는 여기에 URL직접입력/기타를 또 더해서 내부유입(=전체-외부)이
+// 다수 날짜에서 음수가 나오는 문제가 있었다(실데이터 44%~65% 행에서 확인됨). 이제
+// 외부유입 = "외부유입_전체" 값 그대로 사용하고, URL직접입력/기타는 각각 별도 필드로
+// 노출해서(프론트 드릴다운용 실데이터) 이중 합산하지 않는다.
+// ⚠️ 별개로 totalInflow 자체가 같은 날짜의 UV(SHOP_매출 기준)보다 자릿수가 훨씬 작게
+// 나오는 현상도 확인됨 — 아래 진단 로그로 실제 헤더/값을 남겨서 다음 실행 로그에서
+// 바로 확인할 수 있게 했다. 이 부분은 컬럼 자체가 잘못됐을 가능성이 있어 임의로
+// 다른 컬럼으로 바꾸지 않았다(원본 확인 후 처리).
 function readInflowSheet_(ss, sheetName) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return {};
@@ -295,6 +304,11 @@ function readInflowSheet_(ss, sheetName) {
     Logger.log('[readInflowSheet_] "' + sheetName + '" 헤더 불일치로 유입 데이터를 건너뜁니다(0으로 폴백). 실제 헤더: ' + JSON.stringify(header));
     return {};
   }
+  Logger.log(
+    '[readInflowSheet_] "' + sheetName + '" 컬럼 위치 — 날짜:' + cDate + ' 합계:' + cTotal + ' 외부전체:' + cExt1 +
+    ' URL직접입력:' + cExt2 + ' 기타:' + cExt3 + ' / 데이터 3행 샘플: ' +
+    JSON.stringify(values.slice(2, 5).map((r) => [r[cDate], r[cTotal], r[cExt1], r[cExt2], r[cExt3]]))
+  );
 
   const out = {};
   for (let i = 1; i < values.length; i++) {
@@ -302,8 +316,16 @@ function readInflowSheet_(ss, sheetName) {
     if (!(row[cDate] instanceof Date)) continue; // 월 소계 등 텍스트 날짜 행 제외
     const date = fmtDate_(row[cDate]);
     const total = Number(row[cTotal]) || 0;
-    const external = (Number(row[cExt1]) || 0) + (Number(row[cExt2]) || 0) + (Number(row[cExt3]) || 0);
-    out[date] = { totalInflow: total, externalInflow: external, internalInflow: total - external };
+    const urlDirect = Number(row[cExt2]) || 0;
+    const etc = Number(row[cExt3]) || 0;
+    const external = Number(row[cExt1]) || 0; // "외부유입_전체" 자체가 합계이므로 URL직접입력/기타를 추가로 더하지 않음
+    out[date] = {
+      totalInflow: total,
+      externalInflow: external,
+      internalInflow: total - external,
+      externalUrlDirect: urlDirect,
+      externalEtc: etc,
+    };
   }
   return out;
 }
@@ -339,16 +361,19 @@ function buildSkuDaily_(ss, mainSkus) {
     out[code] = dates.map((date) => {
       const t = tradeRows[date];
       const cust = custRows[date] || { newCustomers: 0, existingCustomers: 0 };
-      const inf = inflowRows[date] || { totalInflow: 0, internalInflow: 0, externalInflow: 0 };
+      const inf = inflowRows[date] || { totalInflow: 0, internalInflow: 0, externalInflow: 0, externalUrlDirect: 0, externalEtc: 0 };
       const totalCustomers = cust.newCustomers + cust.existingCustomers;
       return {
         date: date,
         sales: t.sales, qty: t.qty,
-        orders: t.orders || totalCustomers, // 상품별 주문건수 컬럼이 없다면 고객수로 근사 (TODO 확인)
-        uv: inf.uv || 0,
+        orders: t.orders, // 거래현황 행 수 = 이 상품이 포함된 주문건수 (readTradeSheet_ 참고)
+        // SKU 단위의 별도 UV(순방문자) 소스가 원본에 없어, 상품상세 PV(전체유입)를 UV 근사치로 사용
+        // (숍 전체 UV는 SHOP_매출의 실측 UV 컬럼을 그대로 씀 — 이건 SKU에만 해당하는 추정치)
+        uv: inf.totalInflow || 0,
         newRatio: totalCustomers ? (cust.newCustomers / totalCustomers) * 100 : 0,
         existingRatio: totalCustomers ? (cust.existingCustomers / totalCustomers) * 100 : 0,
         totalInflow: inf.totalInflow, internalInflow: inf.internalInflow, externalInflow: inf.externalInflow,
+        externalUrlDirect: inf.externalUrlDirect || 0, externalEtc: inf.externalEtc || 0,
       };
     });
   });
@@ -358,6 +383,10 @@ function buildSkuDaily_(ss, mainSkus) {
 // 26)/25)SHOP_거래현황: B열(상품번호, 메인 SKU와 동일한 숫자 코드) = 매칭 키,
 // G열(취소분반영 거래금액) = 매출, J열(취소분반영 거래상품수량) = 판매수량
 // 판매자상품코드(yp****)는 메인 SKU 코드와 스킴이 달라 매칭 키로 쓰지 않는다(확인됨).
+// ⚠️ 주문건수(orders): 이 시트에 별도 "주문건수" 컬럼이 없어서, 거래현황 = 거래 1건당
+// 1행 구조라는 전제로 (상품코드, 날짜)별 매칭 행 수를 주문건수로 집계한다. 하나의
+// 실제 주문에 이 상품이 여러 줄로 쪼개져 있는 등 시트 구조가 다르면 부정확할 수 있으니
+// 원본에서 특정 SKU·날짜의 실제 주문건수와 한 번 대조 확인을 권장한다.
 function readTradeSheet_(ss, sheetName) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return {};
@@ -366,7 +395,7 @@ function readTradeSheet_(ss, sheetName) {
   const idx = (name) => requireCol_(header, name, sheetName);
   const cDate = idx("날짜"), cCode = idx("상품번호"), cSalesAdj = idx("취소분반영 거래금액"), cQtyAdj = idx("취소분반영 거래상품수량");
 
-  const out = {}; // code -> date -> {sales, qty}
+  const out = {}; // code -> date -> {sales, qty, orders}
   let scanned = 0, matched = 0;
   const sampleCodes = [];
   for (let i = 1; i < values.length; i++) {
@@ -380,9 +409,11 @@ function readTradeSheet_(ss, sheetName) {
     if (!out[code]) out[code] = {};
     const prevSales = (out[code][date] && out[code][date].sales) || 0;
     const prevQty = (out[code][date] && out[code][date].qty) || 0;
+    const prevOrders = (out[code][date] && out[code][date].orders) || 0;
     out[code][date] = {
       sales: prevSales + (Number(row[cSalesAdj]) || 0),
       qty: prevQty + (Number(row[cQtyAdj]) || 0),
+      orders: prevOrders + 1,
     };
   }
   Logger.log('[readTradeSheet_] "' + sheetName + '" ' + scanned + '행 스캔, ' + matched + '행 반영. 상품번호 샘플: ' + JSON.stringify(sampleCodes));
@@ -394,11 +425,13 @@ function readCustomerByProductSheets_(ss, mainSkus) {
   const out = {};
   mainSkus.forEach((sku) => { out[sku.code] = {}; });
 
+  const foundSheets = []; // 진단 로그용 — 어떤 "_고객" 시트가 있었고 B2가 뭐였는지, 매칭됐는지
   ss.getSheets().forEach((sheet) => {
     const name = sheet.getName();
     if (!name.endsWith("_고객")) return;
-    const productCode = String(sheet.getRange("B2").getValue());
+    const productCode = normHeader_(sheet.getRange("B2").getValue()); // 공백 등 trim (헤더와 동일한 정규화 규칙 적용)
     const matched = mainSkus.find((s) => s.code === productCode);
+    foundSheets.push({ sheet: name, b2: productCode, matched: matched ? matched.code : null });
     if (!matched) return; // 메인 SKU 목록에 없는 고객 시트는 건너뜀
 
     const values = sheet.getDataRange().getValues();
@@ -418,11 +451,16 @@ function readCustomerByProductSheets_(ss, mainSkus) {
     }
     out[matched.code] = byDate;
   });
+  Logger.log(
+    '[readCustomerByProductSheets_] "_고객"로 끝나는 시트 ' + foundSheets.length + '개 발견, ' +
+    foundSheets.filter((f) => f.matched).length + '개가 메인 SKU와 매칭됨. 상세: ' + JSON.stringify(foundSheets)
+  );
   return out;
 }
 
 // 26)/25)SHOP_유입현황 시트에는 "상품번호" 컬럼이 실제로 존재함(확인됨) — 이 컬럼 기준으로
 // SKU별 유입(PV)을 집계한다. 시트 자체가 없는 경우(예: 25년 시트 미존재)만 빈 결과로 폴백.
+// ⚠️ readInflowSheet_와 동일한 이유로 외부유입 이중 합산을 제거함 (아래 참고).
 function readInflowByProduct_(ss, sheetName) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return {};
@@ -443,9 +481,17 @@ function readInflowByProduct_(ss, sheetName) {
     if (!code || !(row[cDate] instanceof Date)) continue; // 월 소계 등 텍스트 날짜 행 제외
     const date = fmtDate_(row[cDate]);
     const total = Number(row[cTotal]) || 0;
-    const external = (Number(row[cExt1]) || 0) + (Number(row[cExt2]) || 0) + (Number(row[cExt3]) || 0);
+    const urlDirect = Number(row[cExt2]) || 0;
+    const etc = Number(row[cExt3]) || 0;
+    const external = Number(row[cExt1]) || 0; // "외부유입_전체" 자체가 합계이므로 URL직접입력/기타를 추가로 더하지 않음
     if (!out[code]) out[code] = {};
-    out[code][date] = { totalInflow: total, externalInflow: external, internalInflow: total - external };
+    out[code][date] = {
+      totalInflow: total,
+      externalInflow: external,
+      internalInflow: total - external,
+      externalUrlDirect: urlDirect,
+      externalEtc: etc,
+    };
   }
   return out;
 }

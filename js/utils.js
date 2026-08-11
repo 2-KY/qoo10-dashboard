@@ -88,6 +88,7 @@ export function aggregateRows(rows) {
       sales: 0, orders: 0, qty: 0, uv: 0, aov: 0,
       newCustomers: 0, existingCustomers: 0, newRatio: 0, existingRatio: 0,
       totalInflow: 0, internalInflow: 0, externalInflow: 0,
+      externalUrlDirect: 0, externalEtc: 0,
       internalRatio: 0, externalRatio: 0, cvr: 0,
     };
   }
@@ -101,6 +102,8 @@ export function aggregateRows(rows) {
   const totalInflow = sum("totalInflow");
   const internalInflow = sum("internalInflow");
   const externalInflow = sum("externalInflow");
+  const externalUrlDirect = sum("externalUrlDirect");
+  const externalEtc = sum("externalEtc");
   const totalCustomers = newCustomers + existingCustomers;
   return {
     sales, orders, qty, uv,
@@ -108,7 +111,7 @@ export function aggregateRows(rows) {
     newCustomers, existingCustomers,
     newRatio: totalCustomers ? (newCustomers / totalCustomers) * 100 : 0,
     existingRatio: totalCustomers ? (existingCustomers / totalCustomers) * 100 : 0,
-    totalInflow, internalInflow, externalInflow,
+    totalInflow, internalInflow, externalInflow, externalUrlDirect, externalEtc,
     internalRatio: totalInflow ? (internalInflow / totalInflow) * 100 : 0,
     externalRatio: totalInflow ? (externalInflow / totalInflow) * 100 : 0,
     cvr: totalInflow ? (orders / totalInflow) * 100 : 0,
