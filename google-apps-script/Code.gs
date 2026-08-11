@@ -357,14 +357,16 @@ function buildSkuDaily_(ss, mainSkus) {
   return out;
 }
 
-// 26)/25)SHOP_거래현황: G열(취소분반영 거래금액) = 매출, J열(취소분반영 거래상품수량) = 판매수량
+// 26)/25)SHOP_거래현황: B열(상품번호, 메인 SKU와 동일한 숫자 코드) = 매칭 키,
+// G열(취소분반영 거래금액) = 매출, J열(취소분반영 거래상품수량) = 판매수량
+// 판매자상품코드(yp****)는 메인 SKU 코드와 스킴이 달라 매칭 키로 쓰지 않는다(확인됨).
 function readTradeSheet_(ss, sheetName) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return {};
   const values = sheet.getDataRange().getValues();
   const header = values[0];
   const idx = (name) => requireCol_(header, name, sheetName);
-  const cDate = idx("날짜"), cCode = idx("판매자상품코드"), cSalesAdj = idx("취소분반영 거래금액"), cQtyAdj = idx("취소분반영 거래상품수량");
+  const cDate = idx("날짜"), cCode = idx("상품번호"), cSalesAdj = idx("취소분반영 거래금액"), cQtyAdj = idx("취소분반영 거래상품수량");
 
   const out = {}; // code -> date -> {sales, qty}
   let scanned = 0, matched = 0;
@@ -385,7 +387,7 @@ function readTradeSheet_(ss, sheetName) {
       qty: prevQty + (Number(row[cQtyAdj]) || 0),
     };
   }
-  Logger.log('[readTradeSheet_] "' + sheetName + '" ' + scanned + '행 스캔, ' + matched + '행 반영. 판매자상품코드 샘플: ' + JSON.stringify(sampleCodes));
+  Logger.log('[readTradeSheet_] "' + sheetName + '" ' + scanned + '행 스캔, ' + matched + '행 반영. 상품번호 샘플: ' + JSON.stringify(sampleCodes));
   return out;
 }
 
