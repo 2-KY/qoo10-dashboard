@@ -46,6 +46,7 @@ function syncToGitHub() {
 // ====================================================================
 function buildDashboardData_(ss) {
   const mainSkus = readMainSkus_(ss);          // 프로모션_항목 P~Q열
+  logCustomerSheetDiagnostics_(ss, mainSkus);  // 진단 전용 — data.json 내용에는 영향 없음
   const promotions = readPromotions_(ss, mainSkus); // 프로모션_항목 A~J열 (mainSkus는 P2:P10 마스터 전체 적용)
   const monthlyTargets = readMonthlyTargets_(ss); // 프로모션_항목 L~N열
 
@@ -418,6 +419,59 @@ function readTradeSheet_(ss, sheetName) {
   }
   Logger.log('[readTradeSheet_] "' + sheetName + '" ' + scanned + '행 스캔, ' + matched + '행 반영. 상품번호 샘플: ' + JSON.stringify(sampleCodes));
   return out;
+}
+
+// --------------------------------------------------------------------
+// 진단 전용: 메인 SKU 9개 각각에 대해 "_고객" 시트가 실제로 존재하고, 그 시트가
+// 진짜 고객 데이터(거래고객_신규고객수/거래고객_기존고객수) 헤더를 가지고 있는지
+// 점검해서 실행 로그로만 남긴다. data.json 생성 로직(readCustomerByProductSheets_)은
+// 건드리지 않으며, 이 함수의 결과는 어디에도 반영되지 않는다 — 오직 로그 확인용.
+// (배경: "3D아이크림_고객" 시트가 SKU 1043733776의 B1과 매칭되지만, 실제 2행
+// 헤더는 거래현황류 헤더(시작일/거래금액/... )라서 고객 데이터가 아님이 확인됨.
+// 이런 "이름만 _고객"인 시트를 SKU별로 걸러내기 위한 진단.)
+// --------------------------------------------------------------------
+function logCustomerSheetDiagnostics_(ss, mainSkus) {
+  const customerSheets = ss.getSheets().filter((s) => s.getName().endsWith("_고객"));
+  const byCode = {}; // B1 상품코드 -> 시트
+  customerSheets.forEach((sheet) => {
+    const code = normHeader_(sheet.getRange("B1").getValue());
+    if (code) byCode[code] = sheet;
+  });
+
+  const report = mainSkus.map((sku) => {
+    const sheet = byCode[sku.code];
+    if (!sheet) {
+      return {
+        sku: sku.code, name: sku.name, sheet: null, b1: null,
+        hasCustomerHeader: false, hasNewCol: false, hasExistingCol: false,
+        verdict: "비정상(B1이 이 SKU 코드와 일치하는 \"_고객\" 시트 없음)",
+      };
+    }
+    const sheetName = sheet.getName();
+    const b1 = normHeader_(sheet.getRange("B1").getValue());
+    const values = sheet.getDataRange().getValues();
+    if (values.length < 2) {
+      return {
+        sku: sku.code, name: sku.name, sheet: sheetName, b1,
+        hasCustomerHeader: false, hasNewCol: false, hasExistingCol: false,
+        verdict: "비정상(2행 헤더 없음 — 행 부족)",
+      };
+    }
+    const header = values[1].map((v) => normHeader_(v));
+    const hasNewCol = header.indexOf("거래고객_신규고객수") !== -1;
+    const hasExistingCol = header.indexOf("거래고객_기존고객수") !== -1;
+    const hasCustomerHeader = hasNewCol || hasExistingCol;
+    const verdict = hasNewCol && hasExistingCol
+      ? "정상"
+      : "비정상(고객 데이터 헤더 아님 — 실제 2행 헤더: " + JSON.stringify(values[1]) + ")";
+    return { sku: sku.code, name: sku.name, sheet: sheetName, b1, hasCustomerHeader, hasNewCol, hasExistingCol, verdict };
+  });
+
+  const table = report
+    .map((r) => `${r.sku}(${r.name}) | 시트=${r.sheet || "없음"} | B1=${r.b1 || "-"} | 고객헤더존재=${r.hasCustomerHeader} | 신규컬럼=${r.hasNewCol} | 기존컬럼=${r.hasExistingCol} | ${r.verdict}`)
+    .join("\n");
+  Logger.log("[진단: 메인 SKU 9개별 고객 시트 매핑]\n" + table);
+  return report;
 }
 
 // "{SKU명}_고객" 시트들에서 B1셀 상품코드 매칭 후 날짜별 신규/기존 고객수 추출
