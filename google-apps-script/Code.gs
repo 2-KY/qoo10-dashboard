@@ -828,6 +828,52 @@ function readInflowByProduct_(ss, sheetName) {
     ' 기타(라벨' + cExt3Label + '→실값' + cExt3 + ')'
   );
 
+  // 검증(KY 요청, 계산식은 변경하지 않음 — 원본 컬럼 매핑 자체만 확인):
+  // "외부유입_전체"를 포함해 세부 채널 후보 컬럼들의 실제 헤더 위치와, SKU=1043733766
+  // 2026-07-01~09 구간의 원본값 합계를 전부 로그로 남긴다. 라벨 컬럼과 resolveShiftedDataCol_
+  // 보정 후 컬럼을 둘 다 합산해서 비교할 수 있게 한다(둘 중 어느 쪽이 맞는지는 로그로 판단).
+  if (sheetName.indexOf("26)") === 0) {
+    const CANDIDATE_NAMES = [
+      "외부유입_전체", "외부유입_구글", "외부유입_페이스북", "외부유입_X(트위터)",
+      "외부유입_Instagram", "외부유입_야후", "외부유입_카카쿠", "외부유입_라인",
+      "외부유입_이메일", "외부유입_기타", "URL직접입력", "기타", "합계(총페이지뷰)",
+    ];
+    const findCandidateCol = (name) => {
+      const withPrefix = findColTrim_(header, "유입채널(PV) : " + name);
+      if (withPrefix !== -1) return { col: withPrefix, matchedHeader: "유입채널(PV) : " + name };
+      const bare = findColTrim_(header, name);
+      if (bare !== -1) return { col: bare, matchedHeader: name };
+      return { col: -1, matchedHeader: null };
+    };
+    const colInfo = {};
+    CANDIDATE_NAMES.forEach((name) => {
+      const found = findCandidateCol(name);
+      colInfo[name] = found.col === -1
+        ? { 헤더없음: true }
+        : { 라벨컬럼: found.col, 실제헤더텍스트: found.matchedHeader, 시프트보정컬럼: resolveShiftedDataCol_(header, found.col) };
+    });
+    Logger.log('[검증: 외부유입 컬럼 위치] "' + sheetName + '" 후보 컬럼별 위치: ' + JSON.stringify(colInfo));
+
+    const sumsAtLabel = {}, sumsAtShifted = {};
+    CANDIDATE_NAMES.forEach((name) => { sumsAtLabel[name] = 0; sumsAtShifted[name] = 0; });
+    for (let i = 1; i < values.length; i++) {
+      const row = values[i];
+      const code = String(row[cCode] || "");
+      if (code !== "1043733766" || !(row[cDate] instanceof Date)) continue;
+      const dateStr = fmtDate_(row[cDate]);
+      if (dateStr < "2026-07-01" || dateStr > "2026-07-09") continue;
+      CANDIDATE_NAMES.forEach((name) => {
+        const info = colInfo[name];
+        if (info.헤더없음) return;
+        sumsAtLabel[name] += Number(row[info.라벨컬럼]) || 0;
+        sumsAtShifted[name] += Number(row[info.시프트보정컬럼]) || 0;
+      });
+    }
+    Logger.log('[검증: 외부유입 원본컬럼] sku=1043733766 2026-07-01~09 라벨컬럼 기준 합계: ' + JSON.stringify(sumsAtLabel));
+    Logger.log('[검증: 외부유입 원본컬럼] sku=1043733766 2026-07-01~09 시프트보정컬럼 기준 합계: ' + JSON.stringify(sumsAtShifted));
+    Logger.log('[검증: 외부유입 원본컬럼] "' + sheetName + '" 전체 헤더 행(1행) 참고용: ' + JSON.stringify(header));
+  }
+
   // 검증: SKU=1043733766(3D 크림리필) 2026-07-01~09 PV 합계가 실제 값(85,472)과
   // 일치하는지, 내부+외부=전체 관계가 유지되는지 직접 계산해서 로그로 남긴다.
   // 같은 루프에서 시간대 검증(KY 요청)도 첫 매칭 행에 대해 한 번만 남긴다 — 원본
