@@ -729,10 +729,13 @@ function readInflowByProduct_(ss, sheetName) {
     ' 합계:' + cTotal + ' 외부전체:' + cExt1 + ' URL직접입력:' + cExt2 + ' 기타:' + cExt3
   );
 
-  // 검증용: SKU=1043733766(3D 크림리필), 2026-07-01~09 원본 행을 전부 덤프하고,
-  // (code,date) 조합이 중복되는지(같은 날짜에 같은 상품 행이 2개 이상)도 같이 확인한다.
+  // 검증용(KY 요청): SKU=1043733766(3D 크림리필), 2026-07-01~09 원본 행에 대해
+  // "이 4개 컬럼만"이 아니라 헤더에 있는 모든 컬럼의 값을 통째로 덤프하고, 9일치
+  // 합계를 컬럼별로 전부 계산해서 어떤 컬럼(들)의 합이 실제 값(85,472)과 일치하는지
+  // 직접 눈으로 확인할 수 있게 한다. 집계 로직/컬럼 선택은 전혀 바꾸지 않는다.
   const testRows = [];
   const codeDateCounts = {};
+  const colSums = {}; // "헤더명(컬럼idx)" -> 9일 합계
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
     const code = String(row[cCode] || "");
@@ -740,12 +743,24 @@ function readInflowByProduct_(ss, sheetName) {
     const dateStr = fmtDate_(row[cDate]);
     if (dateStr >= "2026-07-01" && dateStr <= "2026-07-09") {
       codeDateCounts[dateStr] = (codeDateCounts[dateStr] || 0) + 1;
-      testRows.push({ row: i + 1, date: dateStr, total: row[cTotal], ext1: row[cExt1], ext2: row[cExt2], ext3: row[cExt3] });
+      const fullRow = {};
+      for (let c = 0; c < header.length; c++) {
+        const label = normHeader_(header[c]) + "(" + c + ")";
+        fullRow[label] = row[c];
+        const n = Number(row[c]);
+        if (!isNaN(n) && row[c] !== "" && row[c] !== null) colSums[label] = (colSums[label] || 0) + n;
+      }
+      testRows.push({ row: i + 1, date: dateStr, values: fullRow });
     }
   }
   Logger.log(
     '[readInflowByProduct_] "' + sheetName + '" SKU=1043733766 2026-07-01~09 날짜별 행 개수(1보다 크면 (상품,날짜) 중복 존재): ' +
-    JSON.stringify(codeDateCounts) + ' / 실제 행: ' + JSON.stringify(testRows)
+    JSON.stringify(codeDateCounts)
+  );
+  Logger.log('[readInflowByProduct_] SKU=1043733766 2026-07-01~09 행 전체(모든 컬럼): ' + JSON.stringify(testRows));
+  Logger.log(
+    '[readInflowByProduct_] SKU=1043733766 2026-07-01~09 컬럼별 9일 합계(실제값 85,472와 일치하는 컬럼을 찾으세요): ' +
+    JSON.stringify(colSums)
   );
 
   const out = {}; // code -> date -> {...}
