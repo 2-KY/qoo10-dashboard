@@ -86,7 +86,7 @@ export function aggregateRows(rows) {
   if (!rows || rows.length === 0) {
     return {
       sales: 0, orders: 0, qty: 0, uv: 0, aov: 0,
-      newCustomers: 0, existingCustomers: 0, newRatio: 0, existingRatio: 0,
+      newCustomers: 0, existingCustomers: 0, newRatio: null, existingRatio: null,
       totalInflow: 0, internalInflow: 0, externalInflow: 0,
       externalUrlDirect: 0, externalEtc: 0,
       internalRatio: 0, externalRatio: 0, cvr: 0,
@@ -109,8 +109,9 @@ export function aggregateRows(rows) {
     sales, orders, qty, uv,
     aov: orders ? sales / orders : 0,
     newCustomers, existingCustomers,
-    newRatio: totalCustomers ? (newCustomers / totalCustomers) * 100 : 0,
-    existingRatio: totalCustomers ? (existingCustomers / totalCustomers) * 100 : 0,
+    // 분모(신규+기존)가 0이면 "0%"가 아니라 데이터 없음(null) — fmtPct(null)은 "—"로 표시됨
+    newRatio: totalCustomers ? (newCustomers / totalCustomers) * 100 : null,
+    existingRatio: totalCustomers ? (existingCustomers / totalCustomers) * 100 : null,
     totalInflow, internalInflow, externalInflow, externalUrlDirect, externalEtc,
     internalRatio: totalInflow ? (internalInflow / totalInflow) * 100 : 0,
     externalRatio: totalInflow ? (externalInflow / totalInflow) * 100 : 0,
@@ -169,6 +170,20 @@ export function aggregateByDayOffset(dailyArr, rangeStart, rangeEnd) {
   }
   const cumulative = aggregateRange(dailyArr, rangeStart, rangeEnd);
   return [cumulative, ...perDay];
+}
+
+// ---------------------------------------------------------------
+// SKU 매출비중 공통 분모 — "메인 SKU 전체 합계 매출" (연간 화면은 연간 합계,
+// 월별 화면은 월 합계로 각각 호출). 화면마다 따로 계산하면 나중에 한쪽만 고치고
+// 다른 쪽을 놓치는 문제가 생기므로 하나의 함수로 통일한다.
+// aggregateFn: (skuDailyArr) => aggregateRows 결과 (예: (arr) => aggregateYear(arr, year))
+// ---------------------------------------------------------------
+export function sumMainSkuSales(data, mainSkus, aggregateFn) {
+  return mainSkus.reduce((sum, sku) => {
+    const arr = data.skuDaily[sku.code];
+    if (!arr) return sum;
+    return sum + aggregateFn(arr).sales;
+  }, 0);
 }
 
 // ---------------------------------------------------------------

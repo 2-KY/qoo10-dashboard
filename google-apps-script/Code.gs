@@ -188,8 +188,9 @@ function buildShopDaily_(ss) {
         sales: s.sales, orders: s.orders, qty: s.qty, uv: s.uv,
         aov: s.orders ? s.sales / s.orders : 0,
         newCustomers: s.newCustomers, existingCustomers: s.existingCustomers,
-        newRatio: totalCustomers ? (s.newCustomers / totalCustomers) * 100 : 0,
-        existingRatio: totalCustomers ? (s.existingCustomers / totalCustomers) * 100 : 0,
+        // 분모(신규+기존)가 0이면 "0%"가 아니라 데이터 없음(null) — 프론트 fmtPct가 null을 "—"로 표시
+        newRatio: totalCustomers ? (s.newCustomers / totalCustomers) * 100 : null,
+        existingRatio: totalCustomers ? (s.existingCustomers / totalCustomers) * 100 : null,
         totalInflow: inf.totalInflow, internalInflow: inf.internalInflow, externalInflow: inf.externalInflow,
         externalUrlDirect: inf.externalUrlDirect || 0, externalEtc: inf.externalEtc || 0,
       });
@@ -280,16 +281,37 @@ function readShopSalesSheet_(ss, sheetName) {
   return out;
 }
 
-// 26)/25)SHOP_유입현황 시트에서 날짜별 전체/내부/외부 유입 계산
-// ⚠️ 수정(확인 필요, 원본 재검증 권장): "외부유입_전체"는 헤더 이름상 이미 외부유입의
-// 합계로 보이는데도 기존 코드는 여기에 URL직접입력/기타를 또 더해서 내부유입(=전체-외부)이
-// 다수 날짜에서 음수가 나오는 문제가 있었다(실데이터 44%~65% 행에서 확인됨). 이제
-// 외부유입 = "외부유입_전체" 값 그대로 사용하고, URL직접입력/기타는 각각 별도 필드로
-// 노출해서(프론트 드릴다운용 실데이터) 이중 합산하지 않는다.
-// ⚠️ 별개로 totalInflow 자체가 같은 날짜의 UV(SHOP_매출 기준)보다 자릿수가 훨씬 작게
-// 나오는 현상도 확인됨 — 아래 진단 로그로 실제 헤더/값을 남겨서 다음 실행 로그에서
-// 바로 확인할 수 있게 했다. 이 부분은 컬럼 자체가 잘못됐을 가능성이 있어 임의로
-// 다른 컬럼으로 바꾸지 않았다(원본 확인 후 처리).
+// --------------------------------------------------------------------
+// PV(유입) 공통 산식 — 숍 전체(readInflowSheet_)와 SKU별(readInflowByProduct_)이
+// 반드시 같은 계산을 쓰도록 단일 함수로 통합한다. 여러 화면(프로모션 비교/일별분석/
+// 유입분석)이 전부 이 결과를 소비하므로, 산식이 두 곳에 따로 구현되어 있으면
+// 나중에 한쪽만 고치고 다른 쪽을 놓치는 문제가 생길 수 있어 이렇게 합쳐둔다.
+//
+// 확정된 산식(KY 확인):
+//   전체 PV = "유입채널(PV) : 합계(총페이지뷰)"
+//   외부유입 = "유입채널(PV) : 외부유입_전체" (그 자체가 이미 합계 — URL직접입력/기타를
+//              추가로 더하면 이중 합산이 되어 내부유입이 음수가 나오는 문제가 있었음.
+//              두 값은 드릴다운 표시용으로만 별도 보존)
+//   내부유입 = 전체 PV - 외부유입
+// --------------------------------------------------------------------
+function computeInflowRow_(row, cTotal, cExt1, cExt2, cExt3) {
+  const total = Number(row[cTotal]) || 0;
+  const external = Number(row[cExt1]) || 0;
+  const urlDirect = Number(row[cExt2]) || 0;
+  const etc = Number(row[cExt3]) || 0;
+  return {
+    totalInflow: total,
+    externalInflow: external,
+    internalInflow: total - external,
+    externalUrlDirect: urlDirect,
+    externalEtc: etc,
+  };
+}
+
+// 26)/25)SHOP_유입현황 시트에서 날짜별 전체/내부/외부 PV 계산 (숍 전체)
+// ⚠️ totalInflow 자체가 같은 날짜의 UV(SHOP_매출 기준)보다 자릿수가 훨씬 작게 나오는
+// 현상이 있음(예: 최대 6,429 vs UV 230,118) — 원인 미확정, 아래 진단 로그로 실제
+// 헤더/값을 남겨서 확인 필요. 컬럼 자체를 임의로 바꾸지 않았다(원본 확인 후 처리).
 function readInflowSheet_(ss, sheetName) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return {};
@@ -316,17 +338,7 @@ function readInflowSheet_(ss, sheetName) {
     const row = values[i];
     if (!(row[cDate] instanceof Date)) continue; // 월 소계 등 텍스트 날짜 행 제외
     const date = fmtDate_(row[cDate]);
-    const total = Number(row[cTotal]) || 0;
-    const urlDirect = Number(row[cExt2]) || 0;
-    const etc = Number(row[cExt3]) || 0;
-    const external = Number(row[cExt1]) || 0; // "외부유입_전체" 자체가 합계이므로 URL직접입력/기타를 추가로 더하지 않음
-    out[date] = {
-      totalInflow: total,
-      externalInflow: external,
-      internalInflow: total - external,
-      externalUrlDirect: urlDirect,
-      externalEtc: etc,
-    };
+    out[date] = computeInflowRow_(row, cTotal, cExt1, cExt2, cExt3);
   }
   return out;
 }
@@ -372,8 +384,10 @@ function buildSkuDaily_(ss, mainSkus) {
         // SKU 단위의 별도 UV(순방문자) 소스가 원본에 없어, 상품상세 PV(전체유입)를 UV 근사치로 사용
         // (숍 전체 UV는 SHOP_매출의 실측 UV 컬럼을 그대로 씀 — 이건 SKU에만 해당하는 추정치)
         uv: inf.totalInflow || 0,
-        newRatio: totalCustomers ? (cust.newCustomers / totalCustomers) * 100 : 0,
-        existingRatio: totalCustomers ? (cust.existingCustomers / totalCustomers) * 100 : 0,
+        // 분모(신규+기존)가 0이면 "0%"가 아니라 데이터 없음(null) — 고객 시트가 없는
+        // SKU(예: 톡실세럼)나 거래현황류라 배제된 시트(3D아이크림)는 항상 null이 됨
+        newRatio: totalCustomers ? (cust.newCustomers / totalCustomers) * 100 : null,
+        existingRatio: totalCustomers ? (cust.existingCustomers / totalCustomers) * 100 : null,
         totalInflow: inf.totalInflow, internalInflow: inf.internalInflow, externalInflow: inf.externalInflow,
         externalUrlDirect: inf.externalUrlDirect || 0, externalEtc: inf.externalEtc || 0,
       };
@@ -422,53 +436,122 @@ function readTradeSheet_(ss, sheetName) {
 }
 
 // --------------------------------------------------------------------
-// 진단 전용: 메인 SKU 9개 각각에 대해 "_고객" 시트가 실제로 존재하고, 그 시트가
-// 진짜 고객 데이터(거래고객_신규고객수/거래고객_기존고객수) 헤더를 가지고 있는지
-// 점검해서 실행 로그로만 남긴다. data.json 생성 로직(readCustomerByProductSheets_)은
-// 건드리지 않으며, 이 함수의 결과는 어디에도 반영되지 않는다 — 오직 로그 확인용.
-// (배경: "3D아이크림_고객" 시트가 SKU 1043733776의 B1과 매칭되지만, 실제 2행
-// 헤더는 거래현황류 헤더(시작일/거래금액/... )라서 고객 데이터가 아님이 확인됨.
-// 이런 "이름만 _고객"인 시트를 SKU별로 걸러내기 위한 진단.)
+// 고객 시트(*_고객) 공통 파싱 로직 — readCustomerByProductSheets_(실제 데이터 추출)와
+// logCustomerSheetDiagnostics_(진단 로그)가 서로 다른 판정 기준을 쓰면 한쪽만 고치고
+// 다른 쪽을 놓치는 문제가 생기므로, 두 함수가 반드시 같은 판정 함수를 쓰도록 분리했다.
+// --------------------------------------------------------------------
+
+// 이 시트가 "거래현황류" 헤더(거래금액/거래상품수 등)를 갖고 있으면 이름만 "_고객"일 뿐
+// 실제 고객 데이터 시트가 아니라고 판단한다. 실측 확인됨: "3D아이크림_고객" 시트가
+// SKU 1043733776의 B1과 매칭되지만 실제 헤더는
+// ["시작일","거래금액","거래취소금액","취소분반영 거래금액","거래상품수","취소상품수",
+//  "거래상품수량","취소상품수량","취소분반영 거래상품수량"] — 거래현황 시트 형태였다.
+// 이런 시트에서 신규/기존 고객수를 임의로 만들어내지 않기 위한 배제 규칙.
+function looksLikeTradeSheet_(header) {
+  const joined = header.map((v) => normHeader_(v)).join("|");
+  return joined.indexOf("거래금액") !== -1 || joined.indexOf("거래상품수") !== -1;
+}
+
+// 2행 헤더에서 "날짜"가 반복 등장하는 연도별 블록의 시작 컬럼들을 찾는다.
+// 1차: 헤더 텍스트 "날짜" 검색. 2차 폴백: 헤더 문구가 다를 경우를 대비해 데이터 행
+// (최대 10행 샘플)에서 실제 Date 타입 값이 나오는 컬럼을 직접 스캔한다.
+function findDateBlocks_(header, dataRows) {
+  let dateCols = [];
+  for (let c = 0; c < header.length; c++) {
+    if (normHeader_(header[c]) === "날짜") dateCols.push(c);
+  }
+  if (dateCols.length > 0) return { dateCols, source: "header-text" };
+
+  const sample = dataRows.slice(0, 10);
+  for (let c = 0; c < header.length; c++) {
+    if (sample.some((r) => r[c] instanceof Date)) dateCols.push(c);
+  }
+  return { dateCols, source: dateCols.length ? "date-value-scan" : "not-found" };
+}
+
+// 날짜열(dateCol)이 속한 블록(dateCol~blockEnd-1) 안에서 신규/기존 고객수 컬럼을 찾는다.
+// 1차: 헤더 텍스트 "거래고객_신규고객수"/"거래고객_기존고객수" 검색(가장 신뢰도 높음).
+// 2차 폴백: 날짜열 기준 상대 위치(+1=신규, +3=기존)를 사용한다 — 실제 원본 구조
+// 확인됨(KY): 2025년 A날짜/B신규/D기존, 2026년 K날짜/L신규/N기존으로 두 블록 모두
+// 날짜열 기준 +1/+3 오프셋이 정확히 일치한다. 특정 열 문자를 하드코딩하지 않고
+// "날짜열로부터의 상대 위치"만 사용하므로 블록이 어느 컬럼에서 시작하든 동작한다.
+function resolveCustomerColumns_(header, dateCol, blockEnd) {
+  const findColInBlock = (n) => {
+    const target = normHeader_(n);
+    for (let c = dateCol; c < blockEnd; c++) {
+      if (normHeader_(header[c]) === target) return c;
+    }
+    return -1;
+  };
+  let cNew = findColInBlock("거래고객_신규고객수");
+  let cExisting = findColInBlock("거래고객_기존고객수");
+  if (cNew !== -1 && cExisting !== -1) return { cNew, cExisting, method: "header-text" };
+
+  const offsetNew = dateCol + 1, offsetExisting = dateCol + 3;
+  if (offsetExisting < blockEnd) {
+    return { cNew: offsetNew, cExisting: offsetExisting, method: "date-offset(+1/+3)" };
+  }
+  return { cNew: -1, cExisting: -1, method: "not-found" };
+}
+
+// "{SKU명}_고객" 시트 목록에서 B1 상품코드로 메인 SKU와 매칭시킨 시트만 골라낸다.
+// (looksLikeTradeSheet_로 걸러진 시트, B1이 매칭 안 되는 시트는 제외)
+function findCustomerSheetsByCode_(ss, mainSkus) {
+  const byCode = {};
+  ss.getSheets().forEach((sheet) => {
+    const name = sheet.getName();
+    if (!name.endsWith("_고객")) return;
+    const productCode = normHeader_(sheet.getRange("B1").getValue());
+    const matched = mainSkus.find((s) => s.code === productCode);
+    if (matched) byCode[matched.code] = sheet;
+  });
+  return byCode;
+}
+
+// --------------------------------------------------------------------
+// 진단 전용: 메인 SKU 9개 각각에 대해 "_고객" 시트가 실제로 존재하고, 신규/기존
+// 고객수 컬럼을 정상적으로 찾을 수 있는지 점검해서 실행 로그로만 남긴다.
+// readCustomerByProductSheets_와 완전히 동일한 판정 함수(looksLikeTradeSheet_,
+// findDateBlocks_, resolveCustomerColumns_)를 사용하므로 로그와 실제 데이터가
+// 어긋날 일이 없다. data.json 내용에는 영향을 주지 않는다.
 // --------------------------------------------------------------------
 function logCustomerSheetDiagnostics_(ss, mainSkus) {
-  const customerSheets = ss.getSheets().filter((s) => s.getName().endsWith("_고객"));
-  const byCode = {}; // B1 상품코드 -> 시트
-  customerSheets.forEach((sheet) => {
-    const code = normHeader_(sheet.getRange("B1").getValue());
-    if (code) byCode[code] = sheet;
-  });
+  const byCode = findCustomerSheetsByCode_(ss, mainSkus);
 
   const report = mainSkus.map((sku) => {
     const sheet = byCode[sku.code];
     if (!sheet) {
-      return {
-        sku: sku.code, name: sku.name, sheet: null, b1: null,
-        hasCustomerHeader: false, hasNewCol: false, hasExistingCol: false,
-        verdict: "비정상(B1이 이 SKU 코드와 일치하는 \"_고객\" 시트 없음)",
-      };
+      return { sku: sku.code, name: sku.name, sheet: null, b1: null, dateBlocks: 0, dateRows: 0, verdict: "비정상(B1이 이 SKU 코드와 일치하는 \"_고객\" 시트 없음)" };
     }
     const sheetName = sheet.getName();
     const b1 = normHeader_(sheet.getRange("B1").getValue());
     const values = sheet.getDataRange().getValues();
-    if (values.length < 2) {
-      return {
-        sku: sku.code, name: sku.name, sheet: sheetName, b1,
-        hasCustomerHeader: false, hasNewCol: false, hasExistingCol: false,
-        verdict: "비정상(2행 헤더 없음 — 행 부족)",
-      };
+    if (values.length < 4) {
+      return { sku: sku.code, name: sku.name, sheet: sheetName, b1, dateBlocks: 0, dateRows: 0, verdict: "비정상(행 부족)" };
     }
-    const header = values[1].map((v) => normHeader_(v));
-    const hasNewCol = header.indexOf("거래고객_신규고객수") !== -1;
-    const hasExistingCol = header.indexOf("거래고객_기존고객수") !== -1;
-    const hasCustomerHeader = hasNewCol || hasExistingCol;
-    const verdict = hasNewCol && hasExistingCol
-      ? "정상"
-      : "비정상(고객 데이터 헤더 아님 — 실제 2행 헤더: " + JSON.stringify(values[1]) + ")";
-    return { sku: sku.code, name: sku.name, sheet: sheetName, b1, hasCustomerHeader, hasNewCol, hasExistingCol, verdict };
+    const header = values[1];
+    const dataRows = values.slice(2);
+    if (looksLikeTradeSheet_(header)) {
+      return { sku: sku.code, name: sku.name, sheet: sheetName, b1, dateBlocks: 0, dateRows: 0, verdict: "비정상(고객 데이터 시트 아님 — 거래현황류 헤더: " + JSON.stringify(header) + ")" };
+    }
+    const { dateCols, source } = findDateBlocks_(header, dataRows);
+    let dateRows = 0;
+    const blockInfo = dateCols.map((dateCol, bi) => {
+      const blockEnd = bi + 1 < dateCols.length ? dateCols[bi + 1] : header.length;
+      const { cNew, cExisting, method } = resolveCustomerColumns_(header, dateCol, blockEnd);
+      if (cNew !== -1 && cExisting !== -1) {
+        dataRows.forEach((row) => { if (row[dateCol] instanceof Date) dateRows++; });
+      }
+      return { dateCol, cNew, cExisting, method };
+    });
+    const verdict = dateCols.length > 0 && blockInfo.every((b) => b.cNew !== -1)
+      ? "정상(dateColSource=" + source + ")"
+      : "비정상(신규/기존 컬럼을 못 찾음 — blockInfo: " + JSON.stringify(blockInfo) + ")";
+    return { sku: sku.code, name: sku.name, sheet: sheetName, b1, dateBlocks: dateCols.length, dateRows, verdict };
   });
 
   const table = report
-    .map((r) => `${r.sku}(${r.name}) | 시트=${r.sheet || "없음"} | B1=${r.b1 || "-"} | 고객헤더존재=${r.hasCustomerHeader} | 신규컬럼=${r.hasNewCol} | 기존컬럼=${r.hasExistingCol} | ${r.verdict}`)
+    .map((r) => `${r.sku}(${r.name}) | 시트=${r.sheet || "없음"} | B1=${r.b1 || "-"} | dateBlocks=${r.dateBlocks} | dateRows=${r.dateRows} | ${r.verdict}`)
     .join("\n");
   Logger.log("[진단: 메인 SKU 9개별 고객 시트 매핑]\n" + table);
   return report;
@@ -477,70 +560,44 @@ function logCustomerSheetDiagnostics_(ss, mainSkus) {
 // "{SKU명}_고객" 시트들에서 B1셀 상품코드 매칭 후 날짜별 신규/기존 고객수 추출
 // 실제 구조 확인됨(KY):
 //   1행: A1="상품코드", B1=상품코드 값 (헤더 아님)
-//   2행: 실제 컬럼 헤더 — "날짜" 헤더가 연도 블록별로 반복 등장
-//        (2025년: A열 날짜 + B:I 데이터, 2026년: K열 날짜 + L:S 데이터)
-//   3행부터 데이터. 신규 SKU는 런칭 이전 구간의 날짜 행이 아예 없거나 비어있을 수
-//   있는데, 이는 정상이며 에러 없이 그냥 해당 날짜가 없는 것으로 처리한다.
-// ⚠️ 헤더 텍스트("날짜")로 블록을 찾다가 실패한 이력이 있어(실행 로그로 확인:
-// dateBlocks:0), 헤더 문구에만 의존하지 않도록 폴백을 추가했다 — 헤더에서 "날짜"를
-// 못 찾으면 데이터 행을 직접 스캔해서 실제 Date 타입 값이 나오는 컬럼을 날짜열로
-// 인정한다(표시 형식/문구와 무관하게 실제 값 타입만 근거로 삼음). 그래도 컬럼을
-// 못 찾는 경우를 위해 로그에 헤더 원문을 통째로 남긴다.
+//   2행: 실제 컬럼 헤더 — "날짜"가 연도 블록별로 반복 등장, 신규/기존 고객수는
+//        날짜열 기준 +1/+3 위치 (2025: A날짜/B신규/D기존, 2026: K날짜/L신규/N기존)
+//   3행부터 데이터. 신규 SKU는 런칭 이전 구간의 날짜 행이 없을 수 있으며, 이는
+//   정상이므로 에러 없이 그냥 해당 날짜가 없는 것으로 처리한다(0으로 채우지 않음).
+// "3D아이크림_고객"처럼 이름만 "_고객"이고 실제로는 거래현황 헤더인 시트는
+// looksLikeTradeSheet_로 걸러내고 데이터를 추출하지 않는다.
 function readCustomerByProductSheets_(ss, mainSkus) {
   const out = {};
   mainSkus.forEach((sku) => { out[sku.code] = {}; });
+  const byCode = findCustomerSheetsByCode_(ss, mainSkus);
 
-  const foundSheets = []; // 진단 로그용
-  ss.getSheets().forEach((sheet) => {
-    const name = sheet.getName();
-    if (!name.endsWith("_고객")) return;
-    const productCode = normHeader_(sheet.getRange("B1").getValue());
-    const matched = mainSkus.find((s) => s.code === productCode);
-    if (!matched) {
-      foundSheets.push({ sheet: name, b1: productCode, matched: null, dateRows: 0 });
-      return; // 메인 SKU 목록에 없는 고객 시트는 건너뜀
-    }
-
-    const values = sheet.getDataRange().getValues();
-    if (values.length < 4) {
-      foundSheets.push({ sheet: name, b1: productCode, matched: matched.code, dateRows: 0, note: "행 부족(4행 미만)" });
+  const report = []; // 로그용
+  mainSkus.forEach((sku) => {
+    const sheet = byCode[sku.code];
+    if (!sheet) {
+      report.push({ sku: sku.code, sheet: null, dateRows: 0, note: "매칭 시트 없음" });
       return;
     }
-    const row1 = values[0];
+    const sheetName = sheet.getName();
+    const values = sheet.getDataRange().getValues();
+    if (values.length < 4) {
+      report.push({ sku: sku.code, sheet: sheetName, dateRows: 0, note: "행 부족(4행 미만)" });
+      return;
+    }
     const header = values[1]; // 2행이 실제 헤더 (1행은 상품코드 라벨 행)
     const dataRows = values.slice(2); // 3행부터 데이터
 
-    // 1차: "날짜" 헤더 텍스트로 블록 시작 컬럼 탐색
-    let dateCols = [];
-    for (let c = 0; c < header.length; c++) {
-      if (normHeader_(header[c]) === "날짜") dateCols.push(c);
-    }
-    let dateColSource = "header-text";
-    // 2차 폴백: 헤더 텍스트로 못 찾으면 데이터 행(최대 10행 샘플)에서 실제 Date 타입
-    // 값이 나오는 컬럼을 직접 스캔 — 헤더 문구가 다르거나 예상과 달라도 안전하게 탐지
-    if (dateCols.length === 0) {
-      const sample = dataRows.slice(0, 10);
-      for (let c = 0; c < header.length; c++) {
-        if (sample.some((r) => r[c] instanceof Date)) dateCols.push(c);
-      }
-      dateColSource = "date-value-scan";
+    if (looksLikeTradeSheet_(header)) {
+      report.push({ sku: sku.code, sheet: sheetName, dateRows: 0, note: "고객 데이터 시트 아님(거래현황류 헤더) — 제외" });
+      return;
     }
 
+    const { dateCols, source } = findDateBlocks_(header, dataRows);
     const byDate = {};
-    const blockInfo = []; // 진단 로그용 — 블록별로 실제 어떤 헤더가 있었는지
     dateCols.forEach((dateCol, bi) => {
       const blockEnd = bi + 1 < dateCols.length ? dateCols[bi + 1] : header.length;
-      const findColInBlock = (n) => {
-        const target = normHeader_(n);
-        for (let c = dateCol; c < blockEnd; c++) {
-          if (normHeader_(header[c]) === target) return c;
-        }
-        return -1;
-      };
-      const cNew = findColInBlock("거래고객_신규고객수");
-      const cExisting = findColInBlock("거래고객_기존고객수");
-      blockInfo.push({ dateCol, blockEnd, cNew, cExisting, headerSlice: header.slice(dateCol, blockEnd) });
-      if (cNew === -1 || cExisting === -1) return; // 이 블록엔 해당 컬럼이 없음 — 건너뜀(에러 아님)
+      const { cNew, cExisting } = resolveCustomerColumns_(header, dateCol, blockEnd);
+      if (cNew === -1 || cExisting === -1) return; // 이 블록엔 신규/기존 컬럼을 못 찾음 — 건너뜀(에러 아님)
 
       dataRows.forEach((row) => {
         const dateVal = row[dateCol];
@@ -553,24 +610,16 @@ function readCustomerByProductSheets_(ss, mainSkus) {
       });
     });
 
-    out[matched.code] = byDate;
-    foundSheets.push({
-      sheet: name, b1: productCode, matched: matched.code,
-      dateColSource: dateCols.length ? dateColSource : "not-found",
-      dateBlocks: dateCols.length, dateRows: Object.keys(byDate).length,
-      row1Sample: row1.slice(0, 3), row2Sample: header.slice(0, 12), blockInfo,
-    });
+    out[sku.code] = byDate;
+    report.push({ sku: sku.code, sheet: sheetName, dateColSource: source, dateBlocks: dateCols.length, dateRows: Object.keys(byDate).length });
   });
-  Logger.log(
-    '[readCustomerByProductSheets_] "_고객"로 끝나는 시트 ' + foundSheets.length + '개 발견, ' +
-    foundSheets.filter((f) => f.matched).length + '개가 메인 SKU와 매칭됨. SKU별 상세: ' + JSON.stringify(foundSheets)
-  );
+  Logger.log('[readCustomerByProductSheets_] SKU별 결과: ' + JSON.stringify(report));
   return out;
 }
 
 // 26)/25)SHOP_유입현황 시트에는 "상품번호" 컬럼이 실제로 존재함(확인됨) — 이 컬럼 기준으로
-// SKU별 유입(PV)을 집계한다. 시트 자체가 없는 경우(예: 25년 시트 미존재)만 빈 결과로 폴백.
-// ⚠️ readInflowSheet_와 동일한 이유로 외부유입 이중 합산을 제거함 (아래 참고).
+// SKU별 PV(유입)을 집계한다. computeInflowRow_로 숍 전체와 완전히 동일한 산식을 사용한다.
+// 시트 자체가 없는 경우(예: 25년 시트 미존재)만 빈 결과로 폴백.
 function readInflowByProduct_(ss, sheetName) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return {};
@@ -590,18 +639,8 @@ function readInflowByProduct_(ss, sheetName) {
     const code = String(row[cCode] || "");
     if (!code || !(row[cDate] instanceof Date)) continue; // 월 소계 등 텍스트 날짜 행 제외
     const date = fmtDate_(row[cDate]);
-    const total = Number(row[cTotal]) || 0;
-    const urlDirect = Number(row[cExt2]) || 0;
-    const etc = Number(row[cExt3]) || 0;
-    const external = Number(row[cExt1]) || 0; // "외부유입_전체" 자체가 합계이므로 URL직접입력/기타를 추가로 더하지 않음
     if (!out[code]) out[code] = {};
-    out[code][date] = {
-      totalInflow: total,
-      externalInflow: external,
-      internalInflow: total - external,
-      externalUrlDirect: urlDirect,
-      externalEtc: etc,
-    };
+    out[code][date] = computeInflowRow_(row, cTotal, cExt1, cExt2, cExt3);
   }
   return out;
 }

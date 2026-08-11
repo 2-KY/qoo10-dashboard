@@ -7,7 +7,7 @@
 import {
   fmtYen, fmtNum, fmtPct, pctDelta, ppDelta, deltaChipHTML, deltaInlineHTML,
   aggregateRange, aggregateMonth, aggregateYear, aggregateRows,
-  rowsForDayOffset, daysBetween, buildPromoDayLabels, resolveMainSkus,
+  rowsForDayOffset, daysBetween, buildPromoDayLabels, resolveMainSkus, sumMainSkuSales,
 } from "./utils.js";
 import {
   kpiCardHTML, triCompareBarHTML, renderTabs, renderPills, renderAccordion,
@@ -57,11 +57,15 @@ export function renderAnnual(data, year) {
   $("annual-table").querySelector("tbody").innerHTML = monthRows.join("");
 
   // 메인 SKU 연간 흐름
+  // 매출비중 분모 확인: 예전 구현은 "SKU 연간매출 / 숍 전체 연간매출"이었음(shopYear.sales).
+  // 이 표는 월 구분 없이 "연간 합계"만 한 행씩 보여주는 구조라, 분모도 그에 맞춰
+  // "메인 9SKU 연간 합계 매출"로 바꿈 — 월별 화면(2-1)과 같은 기준(sumMainSkuSales)을 공유.
   const mainSkus = resolveMainSkus(data);
+  const mainSkuYearTotal = sumMainSkuSales(data, mainSkus, (arr) => aggregateYear(arr, year));
   const skuRows = mainSkus.map((sku) => {
     const arr = data.skuDaily[sku.code];
     const agg = arr ? aggregateYear(arr, year) : null;
-    const share = agg && shopYear.sales ? (agg.sales / shopYear.sales) * 100 : null;
+    const share = agg && mainSkuYearTotal ? (agg.sales / mainSkuYearTotal) * 100 : null;
     return `<tr>
       <td class="name">${sku.name}${skuBadgeHTML(sku.code)}</td>
       <td class="num">${agg ? fmtYen(agg.sales) : '<span class="tbd">데이터 없음</span>'}</td>
@@ -134,11 +138,13 @@ export function renderMonthly(data, year, month) {
     .join("");
 
   // 메인 SKU 월간 성과
+  // 매출비중 = 해당 SKU 월 매출 / 메인 9SKU 월 전체매출 (연간 화면과 같은 sumMainSkuSales 공유)
   const mainSkus = promo ? resolveMainSkus(data, promo.id) : resolveMainSkus(data);
+  const mainSkuMonthTotal = sumMainSkuSales(data, mainSkus, (arr) => aggregateMonth(arr, year, month));
   const rows = mainSkus.map((sku) => {
     const arr = data.skuDaily[sku.code];
     if (!arr) {
-      return `<tr><td class="name">${sku.name}${skuBadgeHTML(sku.code)}</td><td colspan="7" class="num tbd">데이터 없음</td></tr>`;
+      return `<tr><td class="name">${sku.name}${skuBadgeHTML(sku.code)}</td><td colspan="8" class="num tbd">데이터 없음</td></tr>`;
     }
     const c = aggregateMonth(arr, year, month);
     const p = promo
@@ -147,9 +153,11 @@ export function renderMonthly(data, year, month) {
     const y = promo
       ? aggregateRange(arr, promo.yoy.start, promo.yoy.end)
       : aggregateMonth(arr, fallbackYoyY, month);
+    const share = mainSkuMonthTotal ? (c.sales / mainSkuMonthTotal) * 100 : null;
     return `<tr>
       <td class="name">${sku.name}${skuBadgeHTML(sku.code)}</td>
       <td class="num">${fmtYen(c.sales)}</td>
+      <td class="num">${share !== null ? fmtPct(share, 1) : "—"}</td>
       <td class="num">${deltaInlineHTML(pctDelta(c.sales, p.sales))}</td>
       <td class="num">${deltaInlineHTML(pctDelta(c.sales, y.sales))}</td>
       <td class="num">${fmtNum(c.qty)}개</td>
@@ -176,7 +184,7 @@ const PROMO_METRICS = [
   { key: "sales", label: "매출", type: "currency", pctType: "pct" },
   { key: "orders", label: "주문건수", type: "count", pctType: "pct" },
   { key: "qty", label: "판매수량", type: "count", pctType: "pct" },
-  { key: "totalInflow", label: "유입", type: "count", pctType: "pct" },
+  { key: "totalInflow", label: "PV", type: "count", pctType: "pct" }, // "유입"은 모호해서 실제 원본 지표명인 PV로 표기
   { key: "newRatio", label: "신규・기존비중", type: "ratio", pctType: "pp" },
 ];
 
@@ -245,7 +253,7 @@ export function renderPromo(data, promoId) {
     $("promo-flow-tabs"),
     [
       { key: "all", label: "전항목" },
-      { key: "totalInflow", label: "전체유입" },
+      { key: "totalInflow", label: "전체 PV" },
       { key: "internalInflow", label: "내부유입" },
       { key: "externalInflow", label: "외부유입" },
     ],
@@ -287,7 +295,7 @@ function renderPromoTable(data, promo) {
       }
       let curTxt, prevTxt, yoyTxt, prevDelta, yoyDelta;
       if (m.key === "newRatio") {
-        const exist = (v) => 100 - v;
+        const exist = (v) => (v === null || v === undefined ? null : 100 - v); // null(데이터 없음)을 100%로 잘못 표시하지 않도록 가드
         curTxt = `${fmtPct(s.cur.newRatio, 0)} (기존 ${fmtPct(exist(s.cur.newRatio), 0)})`;
         prevTxt = `${fmtPct(s.prev.newRatio, 0)} (기존 ${fmtPct(exist(s.prev.newRatio), 0)})`;
         yoyTxt = `${fmtPct(s.yoy.newRatio, 0)} (기존 ${fmtPct(exist(s.yoy.newRatio), 0)})`;
@@ -348,7 +356,7 @@ function renderPromoFlowTable(data, promo) {
   const rows = promoAllRows(data, promo);
 
   if (curPromoFlowTab === "all") {
-    thead.innerHTML = `<tr><th>구분</th><th>전체유입</th><th>내부유입</th><th>내부유입비중</th><th>외부유입</th><th>외부유입비중</th></tr>`;
+    thead.innerHTML = `<tr><th>구분</th><th>전체 PV</th><th>내부유입</th><th>내부유입비중</th><th>외부유입</th><th>외부유입비중</th></tr>`;
     body.innerHTML = rows
       .map((row) => {
         const s = promoRowSeries(data, row, promo);
@@ -433,7 +441,7 @@ export function renderDaily(data, promoId) {
       kpiCardHTML({ label: "객단가", value: fmtYen(shopSel.aov), sizeSmall: true }),
       kpiCardHTML({ label: "신규비중", value: fmtPct(shopSel.newRatio, 0), sizeSmall: true }),
       kpiCardHTML({ label: "기존비중", value: fmtPct(shopSel.existingRatio, 0), sizeSmall: true }),
-      kpiCardHTML({ label: "전체유입", value: fmtNum(shopSel.totalInflow), sizeSmall: true }),
+      kpiCardHTML({ label: "전체 PV", value: fmtNum(shopSel.totalInflow), sizeSmall: true }),
       kpiCardHTML({ label: "내부유입", value: fmtNum(shopSel.internalInflow), sizeSmall: true }),
       kpiCardHTML({ label: "내부유입비중", value: fmtPct(shopSel.internalRatio, 0), sizeSmall: true }),
       kpiCardHTML({ label: "외부유입", value: fmtNum(shopSel.externalInflow), sizeSmall: true }),
@@ -458,19 +466,24 @@ export function renderDaily(data, promoId) {
       .map((row) => {
         const arr = row.shop ? data.shopDaily : data.skuDaily[row.code];
         const s = seriesForOffset(arr, promo, selected);
-        if (!s) return `<tr><td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td><td colspan="10" class="num tbd">데이터 없음</td></tr>`;
+        if (!s) return `<tr><td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td><td colspan="14" class="num tbd">데이터 없음</td></tr>`;
+        const uvTxt = row.shop ? fmtNum(s.uv) : `${fmtNum(s.uv)} (PV)`; // 숍 전체=실측 UV, SKU=PV 추정치
         return `<tr>
           <td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td>
           <td class="num">${fmtYen(s.sales)}</td>
           <td class="num">${fmtNum(s.orders)}</td>
           <td class="num">${fmtNum(s.qty)}</td>
-          <td class="num">${fmtNum(s.uv)}</td>
+          <td class="num">${uvTxt}</td>
           <td class="num">${fmtYen(s.aov)}</td>
           <td class="num">${fmtNum(s.totalInflow)}</td>
           <td class="num">${fmtNum(s.internalInflow)}</td>
           <td class="num">${fmtPct(s.internalRatio, 0)}</td>
           <td class="num">${fmtNum(s.externalInflow)}</td>
           <td class="num">${fmtPct(s.externalRatio, 0)}</td>
+          <td class="num">${fmtNum(s.newCustomers)}</td>
+          <td class="num">${fmtNum(s.existingCustomers)}</td>
+          <td class="num">${fmtPct(s.newRatio, 0)}</td>
+          <td class="num">${fmtPct(s.existingRatio, 0)}</td>
         </tr>`;
       })
       .join("");
@@ -543,13 +556,13 @@ export function renderInflow(data, promoId) {
     }
 
     const cur = aggregateRange(arr, promo.current.start, promo.current.end);
-    const estTag = t.shop ? "" : ` <span class="badge-sku" style="color:var(--cur); background:var(--cur-bg);">SKU 실측 · 26)SHOP_유입현황 기준</span>`;
+    const estTag = t.shop ? "" : ` <span class="badge-sku" style="color:var(--cur); background:var(--cur-bg);">SKU 실측 · 25)/26)SHOP_유입현황 기준</span>`;
 
     $("inflow-flow-top").innerHTML = `
       <div class="flow-card total">
-        <div class="fl">전체 유입 (PV) — ${t.shop ? "숍 전체" : t.name}${estTag}</div>
+        <div class="fl">전체 PV — ${t.shop ? "숍 전체" : t.name}${estTag}</div>
         <div class="fv num">${fmtNum(cur.totalInflow)}</div>
-        <div class="fshare">전체유입 = 내부 + 외부</div>
+        <div class="fshare">전체 PV = 내부 + 외부</div>
       </div>
       <div class="flow-card">
         <div class="fl" style="color:var(--cur)">내부 유입</div>
@@ -616,7 +629,7 @@ export function renderInflow(data, promoId) {
   renderTabs(
     $("flow-tabs"),
     [
-      { key: "totalInflow", label: "전체유입" },
+      { key: "totalInflow", label: "전체 PV" },
       { key: "internalInflow", label: "내부유입" },
       { key: "externalInflow", label: "외부유입" },
     ],

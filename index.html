@@ -51,10 +51,10 @@
         </div>
 
         <div class="section-title">메인 SKU 연간 흐름 <span class="badge-sku">동적 관리</span></div>
-        <div class="hint">숍 전체 흐름과 함께 SKU별 매출/판매수량/UV/신규·기존 비중까지 한 화면에서 확인</div>
+        <div class="hint">숍 전체 흐름과 함께 SKU별 매출/판매수량/PV/신규·기존 비중까지 한 화면에서 확인. 매출비중은 메인 9SKU 합계 대비, PV는 SKU 단위 UV 소스가 원본에 없어 상품상세 페이지뷰로 대체한 추정치입니다.</div>
         <div class="panel table-wrap" style="padding:8px 12px;">
           <table id="annual-sku-table">
-            <thead><tr><th>SKU</th><th>매출</th><th>매출비중</th><th>판매수량</th><th>UV</th><th>신규비중</th><th>기존비중</th></tr></thead>
+            <thead><tr><th>SKU</th><th>매출</th><th>매출비중</th><th>판매수량</th><th>PV</th><th>신규비중</th><th>기존비중</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -74,9 +74,10 @@
         <div class="kpi-grid" id="monthly-kpi"></div>
 
         <div class="section-title">메인 SKU 월간 성과</div>
+        <div class="hint">매출비중은 메인 9SKU 월 합계 대비, PV는 SKU 단위 UV 소스가 원본에 없어 상품상세 페이지뷰로 대체한 추정치입니다.</div>
         <div class="panel table-wrap" style="padding:8px 12px;">
           <table id="monthly-sku-table">
-            <thead><tr><th>SKU</th><th>매출</th><th>직전비</th><th>전년비</th><th>판매수량</th><th>UV</th><th>신규비중</th><th>기존비중</th></tr></thead>
+            <thead><tr><th>SKU</th><th>매출</th><th>매출비중</th><th>직전비</th><th>전년비</th><th>판매수량</th><th>PV</th><th>신규비중</th><th>기존비중</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -130,12 +131,14 @@
         <div class="section-title">일자별 매출 추이 <span class="hint" style="display:inline; margin:0;">(선택한 일자가 진하게 표시됩니다)</span></div>
         <div class="panel"><div class="trend" id="trend-chart"></div></div>
 
-        <div class="section-title">숍 전체 + 메인 SKU — 선택 구간 실적 (매출·유입)</div>
+        <div class="section-title">숍 전체 + 메인 SKU — 선택 구간 실적 (매출·유입·고객)</div>
+        <div class="hint">숍 전체는 SHOP_매출/SHOP_유입현황의 실측치, SKU는 상품별 거래·유입·고객 시트의 실측치입니다(SKU의 UV/PV열은 원본에 UV 소스가 없어 PV로 대체한 추정치 — 값에 "(PV)" 표기). SKU 신규·기존고객은 대응하는 "{상품명}_고객" 시트가 없으면 "—"로 표시됩니다.</div>
         <div class="panel table-wrap" style="padding:8px 12px;">
           <table id="daily-table">
             <thead><tr>
-              <th>구분</th><th>매출</th><th>주문건수</th><th>판매수량</th><th>UV</th><th>객단가</th>
-              <th>전체유입</th><th>내부유입</th><th>내부유입비중</th><th>외부유입</th><th>외부유입비중</th>
+              <th>구분</th><th>매출</th><th>주문건수</th><th>판매수량</th><th>UV/PV</th><th>객단가</th>
+              <th>전체 PV</th><th>내부유입</th><th>내부유입비중</th><th>외부유입</th><th>외부유입비중</th>
+              <th>신규고객수</th><th>기존고객수</th><th>신규비중</th><th>기존비중</th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -147,7 +150,7 @@
       <!-- ========================================================= -->
       <div class="screen" data-screen="inflow">
         <div class="section-title" id="inflow-title">유입 분석</div>
-        <div class="hint">숍 전체 또는 메인 SKU를 선택해 유입 상세를 확인합니다 (26)SHOP_유입현황 시트의 상품코드 기준 SKU별 실측 집계). 기본은 3단 요약만 표시하고, 클릭 시 세부 채널이 펼쳐집니다.</div>
+        <div class="hint">숍 전체 또는 메인 SKU를 선택해 PV 상세를 확인합니다 (25)/26)SHOP_유입현황 시트의 상품코드 기준 SKU별 실측 집계, 연도는 프로모션 기간에 맞춰 자동 선택). 기본은 3단 요약만 표시하고, 클릭 시 세부 채널이 펼쳐집니다.</div>
 
         <div class="tabbar" id="inflow-target-tabs"></div>
         <div class="add-sku" style="margin:-4px 0 18px;">
