@@ -393,18 +393,17 @@ function resolveShiftedDataCol_(header, labelCol, maxCol) {
 // 유입분석)이 전부 이 결과를 소비하므로, 산식이 두 곳에 따로 구현되어 있으면
 // 나중에 한쪽만 고치고 다른 쪽을 놓치는 문제가 생길 수 있어 이렇게 합쳐둔다.
 //
-// 확정된 산식(KY 확인):
-//   전체 PV = "유입채널(PV) : 합계(총페이지뷰)"
-//   외부유입 = "유입채널(PV) : 외부유입_전체" (그 자체가 이미 합계 — URL직접입력/기타를
-//              추가로 더하면 이중 합산이 되어 내부유입이 음수가 나오는 문제가 있었음.
-//              두 값은 드릴다운 표시용으로만 별도 보존)
+// 확정된 산식(KY 재확인 — 이전 "외부유입_전체 단독" 기준에서 변경됨):
+//   전체 PV  = "유입채널(PV) : 합계(총페이지뷰)"
+//   외부유입 = "외부유입_전체" + "URL직접입력" + "기타" (3개 합산)
 //   내부유입 = 전체 PV - 외부유입
 // --------------------------------------------------------------------
 function computeInflowRow_(row, cTotal, cExt1, cExt2, cExt3) {
   const total = Number(row[cTotal]) || 0;
-  const external = Number(row[cExt1]) || 0;
+  const externalAll = Number(row[cExt1]) || 0;
   const urlDirect = Number(row[cExt2]) || 0;
   const etc = Number(row[cExt3]) || 0;
+  const external = externalAll + urlDirect + etc;
   return {
     totalInflow: total,
     externalInflow: external,
@@ -470,16 +469,20 @@ function readInflowSheet_(ss, sheetName) {
     rowCounts[date] = (rowCounts[date] || 0) + 1;
   }
 
-  // 검증(KY 요청): 2026-07-01~09 날짜별 원본 행 수 + 합산된 total/internal/external PV +
-  // 내부+외부=전체 성립 여부를 직접 계산해서 로그로 남긴다.
+  // 검증(KY 요청): 2026-07-01~09 날짜별 원본 행 수 + 3개 원본 컬럼(externalAllPV/
+  // externalUrlDirectPV/externalEtcPV) + 계산된 externalPV/internalPV + 전체PV 일치 여부.
+  // externalAllPV는 별도 누적하지 않고 external-urlDirect-etc로 역산(같은 값, 새 계산경로 없음).
   const verify = [];
   for (let d = 1; d <= 9; d++) {
     const dateStr = "2026-07-0" + d;
     if (!out[dateStr]) continue;
     const v = out[dateStr];
+    const externalAllPV = v.externalInflow - v.externalUrlDirect - v.externalEtc;
     verify.push({
       date: dateStr, 원본행수: rowCounts[dateStr] || 0,
-      totalPV: v.totalInflow, internalPV: v.internalInflow, externalPV: v.externalInflow,
+      totalPV: v.totalInflow,
+      externalAllPV: externalAllPV, externalUrlDirectPV: v.externalUrlDirect, externalEtcPV: v.externalEtc,
+      계산된externalPV: v.externalInflow, 계산된internalPV: v.internalInflow,
       "내부+외부": v.internalInflow + v.externalInflow,
       일치: v.internalInflow + v.externalInflow === v.totalInflow,
     });
@@ -831,6 +834,7 @@ function readInflowByProduct_(ss, sheetName) {
   // Date 값, fmtDate_ 결과(Session 시간대 기준), 스프레드시트 시간대 기준 변환 결과를
   // 나란히 비교해서 하루가 밀리는지 직접 확인할 수 있게 한다(로직은 바꾸지 않음).
   let testPvSum = 0, testIntSum = 0, testExtSum = 0, testDays = 0;
+  let testUrlDirectSum = 0, testEtcSum = 0;
   let tzLogged = false;
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
@@ -848,13 +852,18 @@ function readInflowByProduct_(ss, sheetName) {
     if (dateStr >= "2026-07-01" && dateStr <= "2026-07-09") {
       const r = computeInflowRow_(row, cTotal, cExt1, cExt2, cExt3);
       testPvSum += r.totalInflow; testIntSum += r.internalInflow; testExtSum += r.externalInflow;
+      testUrlDirectSum += r.externalUrlDirect; testEtcSum += r.externalEtc;
       testDays++;
     }
   }
+  const testExternalAllSum = testExtSum - testUrlDirectSum - testEtcSum; // 역산(같은 값, 새 계산경로 아님)
   Logger.log(
     '[검증: SKU PV] sku=1043733766 dateRange=2026-07-01~09 일수=' + testDays +
-    ' PV합계=' + testPvSum + ' (실제값 85,472와 일치해야 함: ' + (testPvSum === 85472) + ')' +
-    ' 내부=' + testIntSum + ' 외부=' + testExtSum + ' 내부+외부=' + (testIntSum + testExtSum) +
+    ' totalPV=' + testPvSum + ' (실제값 85,472와 일치해야 함: ' + (testPvSum === 85472) + ')' +
+    ' | externalAllPV=' + testExternalAllSum + ' externalUrlDirectPV=' + testUrlDirectSum + ' externalEtcPV=' + testEtcSum +
+    ' | 계산된externalPV=' + testExtSum + '(=externalAllPV+externalUrlDirectPV+externalEtcPV)' +
+    ' | 계산된internalPV=' + testIntSum + '(=totalPV-externalPV)' +
+    ' | 내부+외부=' + (testIntSum + testExtSum) +
     ' (전체PV와 일치: ' + (testIntSum + testExtSum === testPvSum) + ')'
   );
 
