@@ -346,6 +346,25 @@ function readShopSalesSheet_(ss, sheetName) {
   return out;
 }
 
+// 헤더 라벨은 있는데 그 컬럼의 실제 값이 다른 지표인 경우를 위한 보정.
+// 실측 확인됨(KY): "유입채널(PV) : 합계(총페이지뷰)" 라벨은 55번 컬럼에 있는데 그
+// 값(1,312)은 실제 PV(85,472)와 다르고, 바로 다음 컬럼(56번, 헤더는 빈 문자열)의
+// 값이 실제 PV와 정확히 일치했다 — 라벨이 붙은 헤더 셀과 실제 데이터 컬럼이 한 칸
+// 어긋나 있는 구조(병합 셀 등으로 추정). 컬럼 번호를 하드코딩하지 않고, "라벨 컬럼
+// 바로 다음 헤더가 비어있으면 그 다음 컬럼을 실제 값으로 쓴다"는 규칙으로 일반화해서
+// 향후 헤더 구조가 다시 바뀌어도(라벨 위치가 이동해도) 같은 규칙으로 자동 대응한다.
+// 이 패턴이 없는 경우(다음 헤더가 비어있지 않음)는 원래 라벨 컬럼을 그대로 쓴다(no-op).
+// maxCol: 블록형 헤더(예: 고객 시트의 연도별 블록)에서 블록 경계를 넘어가지 않도록
+// 제한할 때 사용(생략 시 헤더 전체 길이).
+function resolveShiftedDataCol_(header, labelCol, maxCol) {
+  if (labelCol === -1) return -1;
+  const bound = maxCol === undefined ? header.length : maxCol;
+  if (labelCol + 1 < bound && normHeader_(header[labelCol + 1]) === "") {
+    return labelCol + 1;
+  }
+  return labelCol;
+}
+
 // --------------------------------------------------------------------
 // PV(유입) 공통 산식 — 숍 전체(readInflowSheet_)와 SKU별(readInflowByProduct_)이
 // 반드시 같은 계산을 쓰도록 단일 함수로 통합한다. 여러 화면(프로모션 비교/일별분석/
@@ -374,9 +393,12 @@ function computeInflowRow_(row, cTotal, cExt1, cExt2, cExt3) {
 }
 
 // 26)/25)SHOP_유입현황 시트에서 날짜별 전체/내부/외부 PV 계산 (숍 전체)
-// ⚠️ totalInflow 자체가 같은 날짜의 UV(SHOP_매출 기준)보다 자릿수가 훨씬 작게 나오는
-// 현상이 있음(예: 최대 6,429 vs UV 230,118) — 원인 미확정, 아래 진단 로그로 실제
-// 헤더/값을 남겨서 확인 필요. 컬럼 자체를 임의로 바꾸지 않았다(원본 확인 후 처리).
+// ⚠️ 실측 확인됨(KY): "합계(총페이지뷰)" 헤더 라벨 컬럼과 실제 값이 있는 컬럼이
+// 한 칸 어긋나 있어(라벨 컬럼=1,312, 그 다음 빈헤더 컬럼=85,472 실측 일치)
+// resolveShiftedDataCol_로 보정한다 — 컬럼 번호 하드코딩 아님, 위 함수 설명 참고.
+// ⚠️ 별개 이슈(이번 라운드 범위 아님, 미수정): 이 시트가 (날짜,상품)별로 여러 행을
+// 가지므로 날짜 키로 단순 대입(overwrite)하는 현재 방식은 숍 전체 합계로는 부정확할
+// 수 있음(마지막 상품 행만 남음) — 다음 라운드에서 처리 예정.
 function readInflowSheet_(ss, sheetName) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return {};
@@ -384,26 +406,30 @@ function readInflowSheet_(ss, sheetName) {
   const header = values[0];
   const idx = (name) => findColTrim_(header, name);
   const cDate = idx("날짜");
-  const cTotal = idx("유입채널(PV) : 합계(총페이지뷰)");
-  const cExt1 = idx("유입채널(PV) : 외부유입_전체");
-  const cExt2 = idx("유입채널(PV) : URL직접입력");
-  const cExt3 = idx("유입채널(PV) : 기타");
+  const cTotalLabel = idx("유입채널(PV) : 합계(총페이지뷰)");
+  const cExt1Label = idx("유입채널(PV) : 외부유입_전체");
+  const cExt2Label = idx("유입채널(PV) : URL직접입력");
+  const cExt3Label = idx("유입채널(PV) : 기타");
+  const cTotal = resolveShiftedDataCol_(header, cTotalLabel);
+  const cExt1 = resolveShiftedDataCol_(header, cExt1Label);
+  const cExt2 = resolveShiftedDataCol_(header, cExt2Label);
+  const cExt3 = resolveShiftedDataCol_(header, cExt3Label);
   if (cDate === -1 || cTotal === -1) {
     Logger.log('[readInflowSheet_] "' + sheetName + '" 헤더 불일치로 유입 데이터를 건너뜁니다(0으로 폴백). 실제 헤더: ' + JSON.stringify(header));
     return {};
   }
   Logger.log(
-    '[readInflowSheet_] "' + sheetName + '" 컬럼 위치 — 날짜:' + cDate + ' 합계:' + cTotal + ' 외부전체:' + cExt1 +
-    ' URL직접입력:' + cExt2 + ' 기타:' + cExt3 + ' / 데이터 3행 샘플: ' +
+    '[readInflowSheet_] "' + sheetName + '" 컬럼 위치 — 날짜:' + cDate +
+    ' 합계(라벨' + cTotalLabel + '→실값' + cTotal + ')' +
+    ' 외부전체(라벨' + cExt1Label + '→실값' + cExt1 + ')' +
+    ' URL직접입력(라벨' + cExt2Label + '→실값' + cExt2 + ')' +
+    ' 기타(라벨' + cExt3Label + '→실값' + cExt3 + ')' +
+    ' / 데이터 3행 샘플: ' +
     JSON.stringify(values.slice(2, 5).map((r) => [r[cDate], r[cTotal], r[cExt1], r[cExt2], r[cExt3]]))
   );
-  Logger.log('[readInflowSheet_] "' + sheetName + '" 전체 헤더 행(1행): ' + JSON.stringify(header));
 
-  // 검증용: 2026-07-01~09(3D 크림리필 메가포 기간) 날짜에 해당하는 실제 행을 전부 덤프.
-  // 이 시트가 (날짜,상품)별로 여러 행을 갖고 있다면(=상품별 세부 시트라면), 같은 날짜가
-  // 여러 번 나올 것이고, 현재 로직(날짜 키로 덮어쓰기)은 그중 마지막 행만 남기고 나머지를
-  // 잃어버리는 문제가 있을 수 있다 — 컬럼 매핑 로직은 건드리지 않고 사실 확인만 한다.
-  const testRows = [];
+  // 검증: 2026-07-01~09(3D 크림리필 메가포 기간) 날짜별 행 개수 — 1보다 크면 (날짜,상품)
+  // 여러 행이 있다는 뜻(숍 전체 overwrite 이슈, 다음 라운드 처리 예정, 참고용으로만 로그)
   const dateCounts = {};
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
@@ -411,14 +437,11 @@ function readInflowSheet_(ss, sheetName) {
     const dateStr = fmtDate_(row[cDate]);
     if (dateStr >= "2026-07-01" && dateStr <= "2026-07-09") {
       dateCounts[dateStr] = (dateCounts[dateStr] || 0) + 1;
-      if (testRows.length < 30) {
-        testRows.push({ row: i + 1, date: dateStr, total: row[cTotal], ext1: row[cExt1], ext2: row[cExt2], ext3: row[cExt3] });
-      }
     }
   }
   Logger.log(
-    '[readInflowSheet_] "' + sheetName + '" 2026-07-01~09 날짜별 행 개수(1보다 크면 날짜당 여러 행 존재 = 상품별 세부 시트일 가능성): ' +
-    JSON.stringify(dateCounts) + ' / 실제 행 샘플(최대 30개): ' + JSON.stringify(testRows)
+    '[readInflowSheet_] "' + sheetName + '" 2026-07-01~09 날짜별 행 개수(참고용, 이번 라운드 미수정 이슈): ' +
+    JSON.stringify(dateCounts)
   );
 
   const out = {};
@@ -472,6 +495,10 @@ function buildSkuDaily_(ss, mainSkus) {
         // SKU 단위의 별도 UV(순방문자) 소스가 원본에 없어, 상품상세 PV(전체유입)를 UV 근사치로 사용
         // (숍 전체 UV는 SHOP_매출의 실측 UV 컬럼을 그대로 씀 — 이건 SKU에만 해당하는 추정치)
         uv: inf.totalInflow || 0,
+        // ⚠️ 버그 수정: newCustomers/existingCustomers 원본 값이 지금까지 반환 객체에서
+        // 누락되어 있었음(비중만 계산하고 원값은 버림) — daily-table/디버그 로그에서
+        // new/existing이 undefined로 나온 원인. shopDaily와 동일한 필드 구성으로 맞춤.
+        newCustomers: cust.newCustomers, existingCustomers: cust.existingCustomers,
         // 분모(신규+기존)가 0이면 "0%"가 아니라 데이터 없음(null) — 고객 시트가 없는
         // SKU(예: 톡실세럼)나 거래현황류라 배제된 시트(3D아이크림)는 항상 null이 됨
         newRatio: totalCustomers ? (cust.newCustomers / totalCustomers) * 100 : null,
@@ -575,9 +602,15 @@ function resolveCustomerColumns_(header, dateCol, blockEnd) {
     }
     return -1;
   };
-  let cNew = findColInBlock("거래고객_신규고객수");
-  let cExisting = findColInBlock("거래고객_기존고객수");
-  if (cNew !== -1 && cExisting !== -1) return { cNew, cExisting, method: "header-text" };
+  let cNewLabel = findColInBlock("거래고객_신규고객수");
+  let cExistingLabel = findColInBlock("거래고객_기존고객수");
+  if (cNewLabel !== -1 && cExistingLabel !== -1) {
+    // PV 컬럼과 동일한 라벨/실값 어긋남 패턴이 있을 수 있어 동일하게 보정한다
+    // (블록 경계를 넘지 않도록 blockEnd로 제한).
+    const cNew = resolveShiftedDataCol_(header, cNewLabel, blockEnd);
+    const cExisting = resolveShiftedDataCol_(header, cExistingLabel, blockEnd);
+    return { cNew, cExisting, method: "header-text", cNewLabel, cExistingLabel };
+  }
 
   const offsetNew = dateCol + 1, offsetExisting = dateCol + 3;
   if (offsetExisting < blockEnd) {
@@ -686,9 +719,22 @@ function readCustomerByProductSheets_(ss, mainSkus) {
 
     const { dateCols, source } = findDateBlocks_(header, dataRows);
     const byDate = {};
+    const blockDebug = []; // sku=1043733820 검증용 상세 로그
     dateCols.forEach((dateCol, bi) => {
       const blockEnd = bi + 1 < dateCols.length ? dateCols[bi + 1] : header.length;
-      const { cNew, cExisting } = resolveCustomerColumns_(header, dateCol, blockEnd);
+      const resolved = resolveCustomerColumns_(header, dateCol, blockEnd);
+      const { cNew, cExisting } = resolved;
+      if (sku.code === "1043733820") {
+        const sampleRow = dataRows.find((r) => r[dateCol] instanceof Date);
+        blockDebug.push({
+          dateCol, blockEnd, method: resolved.method,
+          cNewLabel: resolved.cNewLabel, cNew, cExistingLabel: resolved.cExistingLabel, cExisting,
+          헤더_신규컬럼: cNew !== -1 ? normHeader_(header[cNew]) : null,
+          헤더_기존컬럼: cExisting !== -1 ? normHeader_(header[cExisting]) : null,
+          샘플행_신규값: sampleRow && cNew !== -1 ? sampleRow[cNew] : null,
+          샘플행_기존값: sampleRow && cExisting !== -1 ? sampleRow[cExisting] : null,
+        });
+      }
       if (cNew === -1 || cExisting === -1) return; // 이 블록엔 신규/기존 컬럼을 못 찾음 — 건너뜀(에러 아님)
 
       dataRows.forEach((row) => {
@@ -701,9 +747,14 @@ function readCustomerByProductSheets_(ss, mainSkus) {
         };
       });
     });
+    if (sku.code === "1043733820") {
+      Logger.log('[검증: 고객 컬럼] sku=1043733820(3D크림단품) 시트="' + sheetName + '" 블록별 상세: ' + JSON.stringify(blockDebug));
+    }
 
+    let newSum = 0, existSum = 0;
+    Object.values(byDate).forEach((v) => { newSum += v.newCustomers; existSum += v.existingCustomers; });
     out[sku.code] = byDate;
-    report.push({ sku: sku.code, sheet: sheetName, dateColSource: source, dateBlocks: dateCols.length, dateRows: Object.keys(byDate).length });
+    report.push({ sku: sku.code, sheet: sheetName, dateColSource: source, dateBlocks: dateCols.length, dateRows: Object.keys(byDate).length, newSum, existSum });
   });
   Logger.log('[readCustomerByProductSheets_] SKU별 결과: ' + JSON.stringify(report));
   return out;
@@ -712,6 +763,9 @@ function readCustomerByProductSheets_(ss, mainSkus) {
 // 26)/25)SHOP_유입현황 시트에는 "상품번호" 컬럼이 실제로 존재함(확인됨) — 이 컬럼 기준으로
 // SKU별 PV(유입)을 집계한다. computeInflowRow_로 숍 전체와 완전히 동일한 산식을 사용한다.
 // 시트 자체가 없는 경우(예: 25년 시트 미존재)만 빈 결과로 폴백.
+// ⚠️ 실측 확인됨(KY): "합계(총페이지뷰)" 라벨 컬럼(55번)의 값(1,312 for
+// 1043733766 2026-07-01~09)은 실제 PV(85,472)와 다르고, 그 다음 컬럼(56번, 헤더
+// 빈 문자열)이 실제 값과 정확히 일치했다. resolveShiftedDataCol_로 동일하게 보정.
 function readInflowByProduct_(ss, sheetName) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return {};
@@ -720,47 +774,41 @@ function readInflowByProduct_(ss, sheetName) {
   const idx = (name) => requireCol_(header, name, sheetName);
   const cDate = idx("날짜");
   const cCode = idx("상품번호");
-  const cTotal = idx("유입채널(PV) : 합계(총페이지뷰)");
-  const cExt1 = idx("유입채널(PV) : 외부유입_전체");
-  const cExt2 = idx("유입채널(PV) : URL직접입력");
-  const cExt3 = idx("유입채널(PV) : 기타");
+  const cTotalLabel = idx("유입채널(PV) : 합계(총페이지뷰)");
+  const cExt1Label = idx("유입채널(PV) : 외부유입_전체");
+  const cExt2Label = idx("유입채널(PV) : URL직접입력");
+  const cExt3Label = idx("유입채널(PV) : 기타");
+  const cTotal = resolveShiftedDataCol_(header, cTotalLabel);
+  const cExt1 = resolveShiftedDataCol_(header, cExt1Label);
+  const cExt2 = resolveShiftedDataCol_(header, cExt2Label);
+  const cExt3 = resolveShiftedDataCol_(header, cExt3Label);
   Logger.log(
     '[readInflowByProduct_] "' + sheetName + '" 컬럼 위치 — 날짜:' + cDate + ' 상품번호:' + cCode +
-    ' 합계:' + cTotal + ' 외부전체:' + cExt1 + ' URL직접입력:' + cExt2 + ' 기타:' + cExt3
+    ' 합계(라벨' + cTotalLabel + '→실값' + cTotal + ')' +
+    ' 외부전체(라벨' + cExt1Label + '→실값' + cExt1 + ')' +
+    ' URL직접입력(라벨' + cExt2Label + '→실값' + cExt2 + ')' +
+    ' 기타(라벨' + cExt3Label + '→실값' + cExt3 + ')'
   );
 
-  // 검증용(KY 요청): SKU=1043733766(3D 크림리필), 2026-07-01~09 원본 행에 대해
-  // "이 4개 컬럼만"이 아니라 헤더에 있는 모든 컬럼의 값을 통째로 덤프하고, 9일치
-  // 합계를 컬럼별로 전부 계산해서 어떤 컬럼(들)의 합이 실제 값(85,472)과 일치하는지
-  // 직접 눈으로 확인할 수 있게 한다. 집계 로직/컬럼 선택은 전혀 바꾸지 않는다.
-  const testRows = [];
-  const codeDateCounts = {};
-  const colSums = {}; // "헤더명(컬럼idx)" -> 9일 합계
+  // 검증: SKU=1043733766(3D 크림리필) 2026-07-01~09 PV 합계가 실제 값(85,472)과
+  // 일치하는지, 내부+외부=전체 관계가 유지되는지 직접 계산해서 로그로 남긴다.
+  let testPvSum = 0, testIntSum = 0, testExtSum = 0, testDays = 0;
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
     const code = String(row[cCode] || "");
     if (code !== "1043733766" || !(row[cDate] instanceof Date)) continue;
     const dateStr = fmtDate_(row[cDate]);
     if (dateStr >= "2026-07-01" && dateStr <= "2026-07-09") {
-      codeDateCounts[dateStr] = (codeDateCounts[dateStr] || 0) + 1;
-      const fullRow = {};
-      for (let c = 0; c < header.length; c++) {
-        const label = normHeader_(header[c]) + "(" + c + ")";
-        fullRow[label] = row[c];
-        const n = Number(row[c]);
-        if (!isNaN(n) && row[c] !== "" && row[c] !== null) colSums[label] = (colSums[label] || 0) + n;
-      }
-      testRows.push({ row: i + 1, date: dateStr, values: fullRow });
+      const r = computeInflowRow_(row, cTotal, cExt1, cExt2, cExt3);
+      testPvSum += r.totalInflow; testIntSum += r.internalInflow; testExtSum += r.externalInflow;
+      testDays++;
     }
   }
   Logger.log(
-    '[readInflowByProduct_] "' + sheetName + '" SKU=1043733766 2026-07-01~09 날짜별 행 개수(1보다 크면 (상품,날짜) 중복 존재): ' +
-    JSON.stringify(codeDateCounts)
-  );
-  Logger.log('[readInflowByProduct_] SKU=1043733766 2026-07-01~09 행 전체(모든 컬럼): ' + JSON.stringify(testRows));
-  Logger.log(
-    '[readInflowByProduct_] SKU=1043733766 2026-07-01~09 컬럼별 9일 합계(실제값 85,472와 일치하는 컬럼을 찾으세요): ' +
-    JSON.stringify(colSums)
+    '[검증: SKU PV] sku=1043733766 dateRange=2026-07-01~09 일수=' + testDays +
+    ' PV합계=' + testPvSum + ' (실제값 85,472와 일치해야 함: ' + (testPvSum === 85472) + ')' +
+    ' 내부=' + testIntSum + ' 외부=' + testExtSum + ' 내부+외부=' + (testIntSum + testExtSum) +
+    ' (전체PV와 일치: ' + (testIntSum + testExtSum === testPvSum) + ')'
   );
 
   const out = {}; // code -> date -> {...}
