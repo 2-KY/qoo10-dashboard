@@ -421,40 +421,73 @@ function readTradeSheet_(ss, sheetName) {
 }
 
 // "{SKU명}_고객" 시트들에서 B1셀 상품코드 매칭 후 날짜별 신규/기존 고객수 추출
-// (기존엔 B2로 읽어서 전부 매칭 실패했었음 — 실행 로그로 B1이 맞다는 것 확인함)
+// 실제 구조 확인됨(KY):
+//   1행: A1="상품코드", B1=상품코드 값 (헤더 아님)
+//   2행: 실제 컬럼 헤더 — "날짜" 헤더가 연도 블록별로 반복 등장
+//        (예: A열부터 2025년 블록, K열부터 2026년 블록 — SHOP_매출과 같은 다중 블록 구조)
+//   3행부터 데이터. 신규 SKU는 런칭 이전 구간의 날짜 행이 아예 없거나 비어있을 수
+//   있는데, 이는 정상이며 에러 없이 그냥 해당 날짜가 없는 것으로 처리한다.
 function readCustomerByProductSheets_(ss, mainSkus) {
   const out = {};
   mainSkus.forEach((sku) => { out[sku.code] = {}; });
 
-  const foundSheets = []; // 진단 로그용 — 어떤 "_고객" 시트가 있었고 B2가 뭐였는지, 매칭됐는지
+  const foundSheets = []; // 진단 로그용 — 어떤 "_고객" 시트가 있었고, SKU별로 몇 개 날짜가 매칭됐는지
   ss.getSheets().forEach((sheet) => {
     const name = sheet.getName();
     if (!name.endsWith("_고객")) return;
-    const productCode = normHeader_(sheet.getRange("B1").getValue()); // 공백 등 trim (헤더와 동일한 정규화 규칙 적용) — 실행 로그로 B1에 있음을 확인함
+    const productCode = normHeader_(sheet.getRange("B1").getValue());
     const matched = mainSkus.find((s) => s.code === productCode);
-    foundSheets.push({ sheet: name, b1: productCode, matched: matched ? matched.code : null });
-    if (!matched) return; // 메인 SKU 목록에 없는 고객 시트는 건너뜀
+    if (!matched) {
+      foundSheets.push({ sheet: name, b1: productCode, matched: null, dateRows: 0 });
+      return; // 메인 SKU 목록에 없는 고객 시트는 건너뜀
+    }
 
     const values = sheet.getDataRange().getValues();
-    const header = values[0];
-    const idx = (n) => requireCol_(header, n, name);
-    const cDate = idx("날짜"), cNew = idx("거래고객_신규고객수"), cExisting = idx("거래고객_기존고객수");
+    if (values.length < 3) {
+      foundSheets.push({ sheet: name, b1: productCode, matched: matched.code, dateRows: 0, note: "행 부족(3행 미만)" });
+      return;
+    }
+    const header = values[1]; // 2행이 실제 헤더 (1행은 상품코드 라벨 행)
+    const dataRows = values.slice(2); // 3행부터 데이터
+
+    // "날짜" 헤더가 연도 블록별로 여러 번 등장 — 각 블록 범위 안에서만 컬럼을 찾는다
+    // (SHOP_매출과 동일한 이유: 전역 탐색은 항상 첫 블록만 찾게 됨)
+    const dateCols = [];
+    for (let c = 0; c < header.length; c++) {
+      if (normHeader_(header[c]) === "날짜") dateCols.push(c);
+    }
 
     const byDate = {};
-    for (let i = 1; i < values.length; i++) {
-      const row = values[i];
-      if (!(row[cDate] instanceof Date)) continue; // 월 소계 등 텍스트 날짜 행 제외
-      const date = fmtDate_(row[cDate]);
-      byDate[date] = {
-        newCustomers: Number(row[cNew]) || 0,
-        existingCustomers: Number(row[cExisting]) || 0,
+    dateCols.forEach((dateCol, bi) => {
+      const blockEnd = bi + 1 < dateCols.length ? dateCols[bi + 1] : header.length;
+      const findColInBlock = (n) => {
+        const target = normHeader_(n);
+        for (let c = dateCol; c < blockEnd; c++) {
+          if (normHeader_(header[c]) === target) return c;
+        }
+        return -1;
       };
-    }
+      const cNew = findColInBlock("거래고객_신규고객수");
+      const cExisting = findColInBlock("거래고객_기존고객수");
+      if (cNew === -1 || cExisting === -1) return; // 이 블록엔 해당 컬럼이 없음 — 건너뜀(에러 아님)
+
+      dataRows.forEach((row) => {
+        const dateVal = row[dateCol];
+        if (!(dateVal instanceof Date)) return; // 런칭 전 등 날짜가 비어있는 행은 자연스럽게 제외
+        const date = fmtDate_(dateVal);
+        byDate[date] = {
+          newCustomers: Number(row[cNew]) || 0,
+          existingCustomers: Number(row[cExisting]) || 0,
+        };
+      });
+    });
+
     out[matched.code] = byDate;
+    foundSheets.push({ sheet: name, b1: productCode, matched: matched.code, dateBlocks: dateCols.length, dateRows: Object.keys(byDate).length });
   });
   Logger.log(
     '[readCustomerByProductSheets_] "_고객"로 끝나는 시트 ' + foundSheets.length + '개 발견, ' +
-    foundSheets.filter((f) => f.matched).length + '개가 메인 SKU와 매칭됨. 상세: ' + JSON.stringify(foundSheets)
+    foundSheets.filter((f) => f.matched).length + '개가 메인 SKU와 매칭됨. SKU별 매칭 날짜 수: ' + JSON.stringify(foundSheets)
   );
   return out;
 }
