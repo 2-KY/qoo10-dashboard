@@ -424,14 +424,19 @@ function readTradeSheet_(ss, sheetName) {
 // 실제 구조 확인됨(KY):
 //   1행: A1="상품코드", B1=상품코드 값 (헤더 아님)
 //   2행: 실제 컬럼 헤더 — "날짜" 헤더가 연도 블록별로 반복 등장
-//        (예: A열부터 2025년 블록, K열부터 2026년 블록 — SHOP_매출과 같은 다중 블록 구조)
+//        (2025년: A열 날짜 + B:I 데이터, 2026년: K열 날짜 + L:S 데이터)
 //   3행부터 데이터. 신규 SKU는 런칭 이전 구간의 날짜 행이 아예 없거나 비어있을 수
 //   있는데, 이는 정상이며 에러 없이 그냥 해당 날짜가 없는 것으로 처리한다.
+// ⚠️ 헤더 텍스트("날짜")로 블록을 찾다가 실패한 이력이 있어(실행 로그로 확인:
+// dateBlocks:0), 헤더 문구에만 의존하지 않도록 폴백을 추가했다 — 헤더에서 "날짜"를
+// 못 찾으면 데이터 행을 직접 스캔해서 실제 Date 타입 값이 나오는 컬럼을 날짜열로
+// 인정한다(표시 형식/문구와 무관하게 실제 값 타입만 근거로 삼음). 그래도 컬럼을
+// 못 찾는 경우를 위해 로그에 헤더 원문을 통째로 남긴다.
 function readCustomerByProductSheets_(ss, mainSkus) {
   const out = {};
   mainSkus.forEach((sku) => { out[sku.code] = {}; });
 
-  const foundSheets = []; // 진단 로그용 — 어떤 "_고객" 시트가 있었고, SKU별로 몇 개 날짜가 매칭됐는지
+  const foundSheets = []; // 진단 로그용
   ss.getSheets().forEach((sheet) => {
     const name = sheet.getName();
     if (!name.endsWith("_고객")) return;
@@ -443,21 +448,32 @@ function readCustomerByProductSheets_(ss, mainSkus) {
     }
 
     const values = sheet.getDataRange().getValues();
-    if (values.length < 3) {
-      foundSheets.push({ sheet: name, b1: productCode, matched: matched.code, dateRows: 0, note: "행 부족(3행 미만)" });
+    if (values.length < 4) {
+      foundSheets.push({ sheet: name, b1: productCode, matched: matched.code, dateRows: 0, note: "행 부족(4행 미만)" });
       return;
     }
+    const row1 = values[0];
     const header = values[1]; // 2행이 실제 헤더 (1행은 상품코드 라벨 행)
     const dataRows = values.slice(2); // 3행부터 데이터
 
-    // "날짜" 헤더가 연도 블록별로 여러 번 등장 — 각 블록 범위 안에서만 컬럼을 찾는다
-    // (SHOP_매출과 동일한 이유: 전역 탐색은 항상 첫 블록만 찾게 됨)
-    const dateCols = [];
+    // 1차: "날짜" 헤더 텍스트로 블록 시작 컬럼 탐색
+    let dateCols = [];
     for (let c = 0; c < header.length; c++) {
       if (normHeader_(header[c]) === "날짜") dateCols.push(c);
     }
+    let dateColSource = "header-text";
+    // 2차 폴백: 헤더 텍스트로 못 찾으면 데이터 행(최대 10행 샘플)에서 실제 Date 타입
+    // 값이 나오는 컬럼을 직접 스캔 — 헤더 문구가 다르거나 예상과 달라도 안전하게 탐지
+    if (dateCols.length === 0) {
+      const sample = dataRows.slice(0, 10);
+      for (let c = 0; c < header.length; c++) {
+        if (sample.some((r) => r[c] instanceof Date)) dateCols.push(c);
+      }
+      dateColSource = "date-value-scan";
+    }
 
     const byDate = {};
+    const blockInfo = []; // 진단 로그용 — 블록별로 실제 어떤 헤더가 있었는지
     dateCols.forEach((dateCol, bi) => {
       const blockEnd = bi + 1 < dateCols.length ? dateCols[bi + 1] : header.length;
       const findColInBlock = (n) => {
@@ -469,6 +485,7 @@ function readCustomerByProductSheets_(ss, mainSkus) {
       };
       const cNew = findColInBlock("거래고객_신규고객수");
       const cExisting = findColInBlock("거래고객_기존고객수");
+      blockInfo.push({ dateCol, blockEnd, cNew, cExisting, headerSlice: header.slice(dateCol, blockEnd) });
       if (cNew === -1 || cExisting === -1) return; // 이 블록엔 해당 컬럼이 없음 — 건너뜀(에러 아님)
 
       dataRows.forEach((row) => {
@@ -483,11 +500,16 @@ function readCustomerByProductSheets_(ss, mainSkus) {
     });
 
     out[matched.code] = byDate;
-    foundSheets.push({ sheet: name, b1: productCode, matched: matched.code, dateBlocks: dateCols.length, dateRows: Object.keys(byDate).length });
+    foundSheets.push({
+      sheet: name, b1: productCode, matched: matched.code,
+      dateColSource: dateCols.length ? dateColSource : "not-found",
+      dateBlocks: dateCols.length, dateRows: Object.keys(byDate).length,
+      row1Sample: row1.slice(0, 3), row2Sample: header.slice(0, 12), blockInfo,
+    });
   });
   Logger.log(
     '[readCustomerByProductSheets_] "_고객"로 끝나는 시트 ' + foundSheets.length + '개 발견, ' +
-    foundSheets.filter((f) => f.matched).length + '개가 메인 SKU와 매칭됨. SKU별 매칭 날짜 수: ' + JSON.stringify(foundSheets)
+    foundSheets.filter((f) => f.matched).length + '개가 메인 SKU와 매칭됨. SKU별 상세: ' + JSON.stringify(foundSheets)
   );
   return out;
 }
