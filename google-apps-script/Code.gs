@@ -420,7 +420,8 @@ function readTradeSheet_(ss, sheetName) {
   return out;
 }
 
-// "{SKU명}_고객" 시트들에서 B2셀 상품코드 매칭 후 날짜별 신규/기존 고객수 추출
+// "{SKU명}_고객" 시트들에서 B1셀 상품코드 매칭 후 날짜별 신규/기존 고객수 추출
+// (기존엔 B2로 읽어서 전부 매칭 실패했었음 — 실행 로그로 B1이 맞다는 것 확인함)
 function readCustomerByProductSheets_(ss, mainSkus) {
   const out = {};
   mainSkus.forEach((sku) => { out[sku.code] = {}; });
@@ -429,9 +430,9 @@ function readCustomerByProductSheets_(ss, mainSkus) {
   ss.getSheets().forEach((sheet) => {
     const name = sheet.getName();
     if (!name.endsWith("_고객")) return;
-    const productCode = normHeader_(sheet.getRange("B2").getValue()); // 공백 등 trim (헤더와 동일한 정규화 규칙 적용)
+    const productCode = normHeader_(sheet.getRange("B1").getValue()); // 공백 등 trim (헤더와 동일한 정규화 규칙 적용) — 실행 로그로 B1에 있음을 확인함
     const matched = mainSkus.find((s) => s.code === productCode);
-    foundSheets.push({ sheet: name, b2: productCode, matched: matched ? matched.code : null });
+    foundSheets.push({ sheet: name, b1: productCode, matched: matched ? matched.code : null });
     if (!matched) return; // 메인 SKU 목록에 없는 고객 시트는 건너뜀
 
     const values = sheet.getDataRange().getValues();
