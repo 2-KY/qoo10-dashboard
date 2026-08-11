@@ -46,7 +46,7 @@ function syncToGitHub() {
 // ====================================================================
 function buildDashboardData_(ss) {
   const mainSkus = readMainSkus_(ss);          // 프로모션_항목 P~Q열
-  const promotions = readPromotions_(ss);       // 프로모션_항목 A~J열
+  const promotions = readPromotions_(ss, mainSkus); // 프로모션_항목 A~J열 (mainSkus는 P2:P10 마스터 전체 적용)
   const monthlyTargets = readMonthlyTargets_(ss); // 프로모션_항목 L~N열
 
   const shopDaily = buildShopDaily_(ss);
@@ -92,10 +92,14 @@ function readMainSkus_(ss) {
 
 // --------------------------------------------------------------------
 // 2-2. 프로모션 정의 (A~J열) — 금번/직전/전년 비교기간의 단일 출처
+// mainSkus: P2:P10은 프로모션 행과 무관한 별도의 SKU 마스터 목록임이 원본에서
+// 확인됨(프로모션별 SKU 매핑 컬럼은 시트에 존재하지 않음) — 모든 프로모션에
+// 마스터 SKU 9개 전체를 그대로 적용한다. (프로모션별로 다른 SKU를 매핑하려면
+// 시트에 전용 컬럼 추가가 필요 — 현재는 그런 컬럼이 없어 구현하지 않음)
 // ⚠️ TODO: isHalfDayFirst(예: 메가와리 0.5일차)를 시트 컬럼으로 관리할지,
 //    프로모션명으로 하드코딩 매칭할지 결정 필요. 아래는 이름 매칭 예시.
 // --------------------------------------------------------------------
-function readPromotions_(ss) {
+function readPromotions_(ss, mainSkus) {
   const sheet = requireSheet_(ss, "프로모션_항목");
   const values = sheet.getDataRange().getValues();
   const header = values[0];
@@ -104,22 +108,13 @@ function readPromotions_(ss) {
   const cName = idx("프로모션명"), cYear = idx("연도"), cMonth = idx("월"),
     cStart = idx("시작일"), cEnd = idx("종료일"),
     cPrevStart = idx("직전 시작일"), cPrevEnd = idx("직전 종료일"),
-    cYoyStart = idx("전년 시작일"), cYoyEnd = idx("전년 종료일"),
-    cMainCode = idx("메인상품코드");
+    cYoyStart = idx("전년 시작일"), cYoyEnd = idx("전년 종료일");
   const cNote = findColTrim_(header, "비고"); // 선택 항목 — 없어도 진행
 
-  // 프로모션명 -> 해당 행들의 메인 SKU 코드 집합
-  const skusByPromoRow = {};
-  for (let i = 1; i < values.length; i++) {
-    const key = i;
-    if (!skusByPromoRow[key]) skusByPromoRow[key] = [];
-    if (values[i][cMainCode]) skusByPromoRow[key].push(String(values[i][cMainCode]));
-  }
-
+  const allSkuCodes = mainSkus.map((s) => s.code);
   const HALF_DAY_PROMO_NAMES = ["메가와리", "メガ割"]; // TODO: 정식 목록/컬럼으로 대체
 
-  const out = [];
-  const grouped = {}; // "연도-월-프로모션명" 단위로 그룹핑 (한 프로모션이 여러 행에 SKU별로 나뉘어 있을 수 있음)
+  const grouped = {}; // "연도-월-프로모션명" 단위로 그룹핑 (한 프로모션이 여러 행에 나뉘어 있을 수 있음)
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
     if (!row[cName]) continue;
@@ -135,29 +130,27 @@ function readPromotions_(ss) {
         yoy: { start: fmtDate_(row[cYoyStart]), end: fmtDate_(row[cYoyEnd]) },
         note: String(row[cNote] || ""),
         isHalfDayFirst: HALF_DAY_PROMO_NAMES.indexOf(String(row[cName])) !== -1,
-        mainSkus: [],
+        mainSkus: allSkuCodes,
       };
     }
-    if (row[cMainCode]) grouped[key].mainSkus.push(String(row[cMainCode]));
   }
-  Object.keys(grouped).forEach((k) => {
-    const p = grouped[k];
-    p.mainSkus = uniq_(p.mainSkus);
-    out.push(p);
-  });
-  return out;
+  return Object.keys(grouped).map((k) => grouped[k]);
 }
 
 // --------------------------------------------------------------------
-// 2-3. 월별 목표매출 (L~N열)
+// 2-3. 월별 목표매출 (L~N열: 연도/월/월 목표 매출)
+// ⚠️ L열("연도")과 M열("월")은 A~J열의 프로모션 자체 "연도"/"월" 헤더와 텍스트가
+// 동일해서(원본 확인됨) 헤더 텍스트 검색(findColTrim_)으로는 구분이 안 되고
+// 항상 왼쪽(A~J열)이 먼저 잡혀버린다. L~N은 연속된 컬럼(확인됨)이므로,
+// "월 목표 매출"(N열, 고유 헤더) 위치를 기준으로 상대 위치로 연도/월을 지정한다.
 // --------------------------------------------------------------------
 function readMonthlyTargets_(ss) {
   const sheet = requireSheet_(ss, "프로모션_항목");
   const values = sheet.getDataRange().getValues();
   const header = values[0];
-  const cYear = findColTrim_(header, "연도_목표") !== -1 ? findColTrim_(header, "연도_목표") : findColTrim_(header, "연도");
-  const cMonth = findColTrim_(header, "월_목표") !== -1 ? findColTrim_(header, "월_목표") : findColTrim_(header, "월");
-  const cTarget = requireCol_(header, "월 목표 매출", "프로모션_항목");
+  const cTarget = requireCol_(header, "월 목표 매출", "프로모션_항목"); // N열
+  const cYear = cTarget - 2; // L열
+  const cMonth = cTarget - 1; // M열
 
   const seen = {};
   const out = [];
@@ -259,6 +252,7 @@ function readShopSalesSheet_(ss, sheetName) {
     const cUv = findColInBlock("UV");
     const cNew = findColInBlock("신규고객");
     const cExisting = findColInBlock("기존고객");
+    const todayStr = fmtDate_(new Date());
 
     dataRows.forEach((row) => {
       const dateVal = row[dateCol];
@@ -266,6 +260,10 @@ function readShopSalesSheet_(ss, sheetName) {
       // 진짜 날짜 셀만 일별 데이터로 인정하고 나머지는 건너뛴다 (실데이터에서 확인된 케이스)
       if (!(dateVal instanceof Date)) return;
       const date = fmtDate_(dateVal);
+      // 아직 도래하지 않은 날짜(이번 달 남은 날짜용으로 미리 만들어둔 빈 행)는 건너뛴다.
+      // 실데이터에서 확인됨: 이런 행이 매출/판매수량/UV는 0인데 주문건수만 1로 채워져 있어
+      // 월 합계 주문건수를 왜곡시킴(원본 시트의 템플릿/수식 문제로 추정, 원본은 수정하지 않음).
+      if (date > todayStr) return;
       out[date] = {
         sales: Number(row[cGmv]) || 0,
         orders: Number(row[cOrders]) || 0,
