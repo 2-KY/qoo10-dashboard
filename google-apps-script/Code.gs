@@ -45,6 +45,14 @@ function syncToGitHub() {
 // 2. 대시보드 데이터 조립
 // ====================================================================
 function buildDashboardData_(ss) {
+  // 검증(KY 요청): 날짜 변환에 쓰이는 두 시간대가 서로 다르면 fmtDate_ 결과가
+  // 하루 밀릴 수 있다 — 로직은 바꾸지 않고 두 값을 그대로 로그로 남겨 비교만 한다.
+  Logger.log(
+    '[검증: 시간대] Session.getScriptTimeZone()="' + Session.getScriptTimeZone() +
+    '" / 스프레드시트 시간대="' + ss.getSpreadsheetTimeZone() +
+    '" (fmtDate_는 Session.getScriptTimeZone()을 사용 — 두 값이 다르면 날짜가 밀릴 수 있음)'
+  );
+
   const mainSkus = readMainSkus_(ss);          // 프로모션_항목 P~Q열
   logCustomerSheetDiagnostics_(ss, mainSkus);  // 진단 전용 — data.json 내용에는 영향 없음
   const promotions = readPromotions_(ss, mainSkus); // 프로모션_항목 A~J열 (mainSkus는 P2:P10 마스터 전체 적용)
@@ -97,14 +105,21 @@ function logDebugSummaries_(shopDaily, skuDaily, promotions, mainSkus) {
     );
   });
 
+  // 데이터 상 마지막 실적 날짜(=사실상 "오늘") — 프로모션 기간이 이 날짜 이후에만
+  // 있으면 "미래라서 0" 정상 케이스, 이전 날짜도 포함되는데 0이면 조건 자체가 문제.
+  const maxDataDate = shopDaily.length ? shopDaily[shopDaily.length - 1].date : null;
+
   // [DEBUG PROMOTION] — 가장 최근 프로모션(프론트 기본 선택과 동일 기준) 기간으로 숍 전체 + SKU별 집계
   if (promotions.length > 0) {
     const promo = promotions.slice().sort((a, b) => (a.current.start < b.current.start ? 1 : -1))[0];
+    const isFuture = maxDataDate !== null && promo.current.start > maxDataDate;
     const shopRows = shopDaily.filter((r) => r.date >= promo.current.start && r.date <= promo.current.end);
     let shopPv = 0, shopInt = 0, shopExt = 0;
     shopRows.forEach((r) => { shopPv += r.totalInflow || 0; shopInt += r.internalInflow || 0; shopExt += r.externalInflow || 0; });
     Logger.log(
       "[DEBUG PROMOTION] promotion=" + promo.name + "(" + promo.current.start + "~" + promo.current.end + ") " +
+      "매칭된날짜수=" + shopRows.length + " (데이터 마지막 날짜=" + maxDataDate + ", 프로모션 시작일이 이후=" + isFuture + " → " +
+      (isFuture ? "0이면 정상(아직 실적 없는 미래 기간)" : "매칭된날짜수가 0인데 미래가 아니면 기간 조건 자체를 확인 필요") + ") " +
       "sku=숍전체 totalPV=" + shopPv + " internalPV=" + shopInt + " externalPV=" + shopExt + " (내부+외부=" + (shopInt + shopExt) + ")"
     );
     mainSkus.forEach((sku) => {
@@ -120,15 +135,22 @@ function logDebugSummaries_(shopDaily, skuDaily, promotions, mainSkus) {
     Logger.log("[DEBUG PROMOTION] 프로모션이 하나도 없어 건너뜀");
   }
 
-  // [DEBUG DAILY] — 검증 대상 SKU(3D크림단품)의 최근 5일 일별 상세
+  // [DEBUG DAILY] — 검증 대상 SKU(3D크림단품)의 최근 5일 + KY 지정 구간(2026-07-27~31) 일별 상세
   const testArr = skuDaily[testCode] || [];
-  testArr.slice(-5).forEach((r) => {
-    Logger.log(
-      "[DEBUG DAILY] date=" + r.date + " sku=" + testCode +
-      " totalPV=" + r.totalInflow + " internalPV=" + r.internalInflow + " externalPV=" + r.externalInflow +
-      " new=" + r.newCustomers + " existing=" + r.existingCustomers
-    );
-  });
+  const logDailyRow = (r) => Logger.log(
+    "[DEBUG DAILY] date=" + r.date + " sku=" + testCode +
+    " totalPV=" + r.totalInflow + " internalPV=" + r.internalInflow + " externalPV=" + r.externalInflow +
+    " new=" + r.newCustomers + " existing=" + r.existingCustomers +
+    " newRatio=" + r.newRatio + " existingRatio=" + r.existingRatio
+  );
+  testArr.slice(-5).forEach(logDailyRow);
+  const julyWindow = testArr.filter((r) => r.date >= "2026-07-27" && r.date <= "2026-07-31");
+  if (julyWindow.length > 0) {
+    Logger.log("[DEBUG DAILY] --- 2026-07-27~31 지정 구간 ---");
+    julyWindow.forEach(logDailyRow);
+  } else {
+    Logger.log("[DEBUG DAILY] 2026-07-27~31 구간에 sku=" + testCode + " 데이터 없음(거래현황에 해당 날짜 자체가 없을 수 있음)");
+  }
 }
 
 // --------------------------------------------------------------------
@@ -396,9 +418,11 @@ function computeInflowRow_(row, cTotal, cExt1, cExt2, cExt3) {
 // ⚠️ 실측 확인됨(KY): "합계(총페이지뷰)" 헤더 라벨 컬럼과 실제 값이 있는 컬럼이
 // 한 칸 어긋나 있어(라벨 컬럼=1,312, 그 다음 빈헤더 컬럼=85,472 실측 일치)
 // resolveShiftedDataCol_로 보정한다 — 컬럼 번호 하드코딩 아님, 위 함수 설명 참고.
-// ⚠️ 별개 이슈(이번 라운드 범위 아님, 미수정): 이 시트가 (날짜,상품)별로 여러 행을
-// 가지므로 날짜 키로 단순 대입(overwrite)하는 현재 방식은 숍 전체 합계로는 부정확할
-// 수 있음(마지막 상품 행만 남음) — 다음 라운드에서 처리 예정.
+// ⚠️ 이 시트는 (날짜,상품)별로 여러 행을 가진다(실측 확인됨: 2026-07-01~09 하루당
+// 66~72행). 숍 전체 집계는 같은 날짜의 모든 상품 행을 합산해야 하므로, 날짜 키에
+// 단순 대입(overwrite)하지 않고 누적 합산(+=)한다. internalInflow는 행별로 이미
+// (total-external)로 계산돼 있으므로, 합산해도 총합의 내부+외부=전체 관계가 그대로
+// 유지된다(선형 연산이라 순서와 무관).
 function readInflowSheet_(ss, sheetName) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return {};
@@ -428,29 +452,40 @@ function readInflowSheet_(ss, sheetName) {
     JSON.stringify(values.slice(2, 5).map((r) => [r[cDate], r[cTotal], r[cExt1], r[cExt2], r[cExt3]]))
   );
 
-  // 검증: 2026-07-01~09(3D 크림리필 메가포 기간) 날짜별 행 개수 — 1보다 크면 (날짜,상품)
-  // 여러 행이 있다는 뜻(숍 전체 overwrite 이슈, 다음 라운드 처리 예정, 참고용으로만 로그)
-  const dateCounts = {};
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i];
-    if (!(row[cDate] instanceof Date)) continue;
-    const dateStr = fmtDate_(row[cDate]);
-    if (dateStr >= "2026-07-01" && dateStr <= "2026-07-09") {
-      dateCounts[dateStr] = (dateCounts[dateStr] || 0) + 1;
-    }
-  }
-  Logger.log(
-    '[readInflowSheet_] "' + sheetName + '" 2026-07-01~09 날짜별 행 개수(참고용, 이번 라운드 미수정 이슈): ' +
-    JSON.stringify(dateCounts)
-  );
-
   const out = {};
+  const rowCounts = {}; // 검증용
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
     if (!(row[cDate] instanceof Date)) continue; // 월 소계 등 텍스트 날짜 행 제외
     const date = fmtDate_(row[cDate]);
-    out[date] = computeInflowRow_(row, cTotal, cExt1, cExt2, cExt3);
+    const r = computeInflowRow_(row, cTotal, cExt1, cExt2, cExt3);
+    if (!out[date]) {
+      out[date] = { totalInflow: 0, internalInflow: 0, externalInflow: 0, externalUrlDirect: 0, externalEtc: 0 };
+    }
+    out[date].totalInflow += r.totalInflow;
+    out[date].internalInflow += r.internalInflow;
+    out[date].externalInflow += r.externalInflow;
+    out[date].externalUrlDirect += r.externalUrlDirect;
+    out[date].externalEtc += r.externalEtc;
+    rowCounts[date] = (rowCounts[date] || 0) + 1;
   }
+
+  // 검증(KY 요청): 2026-07-01~09 날짜별 원본 행 수 + 합산된 total/internal/external PV +
+  // 내부+외부=전체 성립 여부를 직접 계산해서 로그로 남긴다.
+  const verify = [];
+  for (let d = 1; d <= 9; d++) {
+    const dateStr = "2026-07-0" + d;
+    if (!out[dateStr]) continue;
+    const v = out[dateStr];
+    verify.push({
+      date: dateStr, 원본행수: rowCounts[dateStr] || 0,
+      totalPV: v.totalInflow, internalPV: v.internalInflow, externalPV: v.externalInflow,
+      "내부+외부": v.internalInflow + v.externalInflow,
+      일치: v.internalInflow + v.externalInflow === v.totalInflow,
+    });
+  }
+  Logger.log('[검증: 숍 전체 PV 합산] "' + sheetName + '" 2026-07-01~09: ' + JSON.stringify(verify));
+
   return out;
 }
 
@@ -792,12 +827,24 @@ function readInflowByProduct_(ss, sheetName) {
 
   // 검증: SKU=1043733766(3D 크림리필) 2026-07-01~09 PV 합계가 실제 값(85,472)과
   // 일치하는지, 내부+외부=전체 관계가 유지되는지 직접 계산해서 로그로 남긴다.
+  // 같은 루프에서 시간대 검증(KY 요청)도 첫 매칭 행에 대해 한 번만 남긴다 — 원본
+  // Date 값, fmtDate_ 결과(Session 시간대 기준), 스프레드시트 시간대 기준 변환 결과를
+  // 나란히 비교해서 하루가 밀리는지 직접 확인할 수 있게 한다(로직은 바꾸지 않음).
   let testPvSum = 0, testIntSum = 0, testExtSum = 0, testDays = 0;
+  let tzLogged = false;
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
     const code = String(row[cCode] || "");
     if (code !== "1043733766" || !(row[cDate] instanceof Date)) continue;
     const dateStr = fmtDate_(row[cDate]);
+    if (!tzLogged) {
+      tzLogged = true;
+      Logger.log(
+        '[검증: 시간대] sku=1043733766 원본Date.toISOString()="' + row[cDate].toISOString() + '"' +
+        ' / fmtDate_ 결과(Session TZ)="' + dateStr + '"' +
+        ' / 스프레드시트 TZ 기준 변환="' + Utilities.formatDate(row[cDate], ss.getSpreadsheetTimeZone(), "yyyy-MM-dd") + '"'
+      );
+    }
     if (dateStr >= "2026-07-01" && dateStr <= "2026-07-09") {
       const r = computeInflowRow_(row, cTotal, cExt1, cExt2, cExt3);
       testPvSum += r.totalInflow; testIntSum += r.internalInflow; testExtSum += r.externalInflow;
