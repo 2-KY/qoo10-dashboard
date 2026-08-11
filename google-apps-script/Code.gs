@@ -54,6 +54,8 @@ function buildDashboardData_(ss) {
   const skuDaily = buildSkuDaily_(ss, mainSkus);
   const coupons = readCoupons_(ss);
 
+  logDebugSummaries_(shopDaily, skuDaily, promotions, mainSkus); // 진단 전용 — data.json 내용에는 영향 없음
+
   return {
     generatedAt: new Date().toISOString(),
     isSampleData: false,
@@ -64,6 +66,69 @@ function buildDashboardData_(ss) {
     skuDaily: skuDaily,
     coupons: coupons,
   };
+}
+
+// --------------------------------------------------------------------
+// 디버그 로그 (KY 요청) — 조립이 끝난 shopDaily/skuDaily/promotions을 그대로 다시
+// 훑어서 실제 값이 있는지 실행 로그로 남긴다. data.json 내용에는 전혀 영향을 주지
+// 않는다(payload를 반환하기 직전, 읽기 전용으로만 사용).
+// --------------------------------------------------------------------
+function logDebugSummaries_(shopDaily, skuDaily, promotions, mainSkus) {
+  const testCode = "1043733820"; // 3D크림단품 — 지정된 검증 대상 SKU
+
+  // [DEBUG SKU PV] / [DEBUG CUSTOMER] — 9개 SKU 전체, 보유 기간(트레이드 데이터 존재 구간) 합계
+  mainSkus.forEach((sku) => {
+    const arr = skuDaily[sku.code] || [];
+    let pv = 0, newC = 0, existC = 0;
+    arr.forEach((r) => {
+      pv += r.totalInflow || 0;
+      newC += r.newCustomers || 0;
+      existC += r.existingCustomers || 0;
+    });
+    const total = newC + existC;
+    const newRatio = total ? Math.round((newC / total) * 1000) / 10 : null;
+    const existingRatio = total ? Math.round((existC / total) * 1000) / 10 : null;
+    const dateRange = arr.length ? arr[0].date + "~" + arr[arr.length - 1].date : "데이터없음";
+    Logger.log("[DEBUG SKU PV] sku=" + sku.code + "(" + sku.name + ") dateRange=" + dateRange + " pv=" + pv);
+    Logger.log(
+      "[DEBUG CUSTOMER] sku=" + sku.code + "(" + sku.name + ") dateRange=" + dateRange +
+      " newCustomers=" + newC + " existingCustomers=" + existC +
+      " newRatio=" + newRatio + " existingRatio=" + existingRatio
+    );
+  });
+
+  // [DEBUG PROMOTION] — 가장 최근 프로모션(프론트 기본 선택과 동일 기준) 기간으로 숍 전체 + SKU별 집계
+  if (promotions.length > 0) {
+    const promo = promotions.slice().sort((a, b) => (a.current.start < b.current.start ? 1 : -1))[0];
+    const shopRows = shopDaily.filter((r) => r.date >= promo.current.start && r.date <= promo.current.end);
+    let shopPv = 0, shopInt = 0, shopExt = 0;
+    shopRows.forEach((r) => { shopPv += r.totalInflow || 0; shopInt += r.internalInflow || 0; shopExt += r.externalInflow || 0; });
+    Logger.log(
+      "[DEBUG PROMOTION] promotion=" + promo.name + "(" + promo.current.start + "~" + promo.current.end + ") " +
+      "sku=숍전체 totalPV=" + shopPv + " internalPV=" + shopInt + " externalPV=" + shopExt + " (내부+외부=" + (shopInt + shopExt) + ")"
+    );
+    mainSkus.forEach((sku) => {
+      const arr = skuDaily[sku.code] || [];
+      const rows = arr.filter((r) => r.date >= promo.current.start && r.date <= promo.current.end);
+      let pv = 0, newC = 0, existC = 0;
+      rows.forEach((r) => { pv += r.totalInflow || 0; newC += r.newCustomers || 0; existC += r.existingCustomers || 0; });
+      Logger.log(
+        "[DEBUG PROMOTION] promotion=" + promo.name + " sku=" + sku.code + " pv=" + pv + " new=" + newC + " existing=" + existC
+      );
+    });
+  } else {
+    Logger.log("[DEBUG PROMOTION] 프로모션이 하나도 없어 건너뜀");
+  }
+
+  // [DEBUG DAILY] — 검증 대상 SKU(3D크림단품)의 최근 5일 일별 상세
+  const testArr = skuDaily[testCode] || [];
+  testArr.slice(-5).forEach((r) => {
+    Logger.log(
+      "[DEBUG DAILY] date=" + r.date + " sku=" + testCode +
+      " totalPV=" + r.totalInflow + " internalPV=" + r.internalInflow + " externalPV=" + r.externalInflow +
+      " new=" + r.newCustomers + " existing=" + r.existingCustomers
+    );
+  });
 }
 
 // --------------------------------------------------------------------
@@ -441,15 +506,19 @@ function readTradeSheet_(ss, sheetName) {
 // 다른 쪽을 놓치는 문제가 생기므로, 두 함수가 반드시 같은 판정 함수를 쓰도록 분리했다.
 // --------------------------------------------------------------------
 
-// 이 시트가 "거래현황류" 헤더(거래금액/거래상품수 등)를 갖고 있으면 이름만 "_고객"일 뿐
-// 실제 고객 데이터 시트가 아니라고 판단한다. 실측 확인됨: "3D아이크림_고객" 시트가
-// SKU 1043733776의 B1과 매칭되지만 실제 헤더는
-// ["시작일","거래금액","거래취소금액","취소분반영 거래금액","거래상품수","취소상품수",
-//  "거래상품수량","취소상품수량","취소분반영 거래상품수량"] — 거래현황 시트 형태였다.
-// 이런 시트에서 신규/기존 고객수를 임의로 만들어내지 않기 위한 배제 규칙.
-function looksLikeTradeSheet_(header) {
+// 이 시트가 진짜 고객 데이터 시트인지 판정한다.
+// ⚠️ 이전엔 "거래금액/거래상품수 등 거래현황류 단어가 있으면 배제"하는 블랙리스트
+// 방식이었는데, 이게 너무 넓어서 진짜 고객 시트(신규/기존고객수 외의 알 수 없는
+// 나머지 6개 컬럼 중 어딘가에 "거래금액"류 단어가 있었을 가능성)까지 전부 걸러내는
+// 바람에 9개 SKU 전체 신규/기존고객이 0으로 나오는 회귀가 실측으로 확인됨.
+// → 화이트리스트로 전환: "거래고객_신규고객수" 또는 "거래고객_기존고객수" 헤더가
+// 실제로 존재해야만 고객 시트로 인정한다. "3D아이크림_고객"은 이 두 헤더가 전혀
+// 없음이 확인됐으므로(시작일/거래금액/거래취소금액/취소분반영 거래금액/거래상품수/
+// 취소상품수/거래상품수량/취소상품수량/취소분반영 거래상품수량 — "거래고객" 계열 헤더
+// 없음) 이 기준으로도 정확히 배제된다.
+function looksLikeCustomerSheet_(header) {
   const joined = header.map((v) => normHeader_(v)).join("|");
-  return joined.indexOf("거래금액") !== -1 || joined.indexOf("거래상품수") !== -1;
+  return joined.indexOf("거래고객_신규고객수") !== -1 || joined.indexOf("거래고객_기존고객수") !== -1;
 }
 
 // 2행 헤더에서 "날짜"가 반복 등장하는 연도별 블록의 시작 컬럼들을 찾는다.
@@ -495,7 +564,7 @@ function resolveCustomerColumns_(header, dateCol, blockEnd) {
 }
 
 // "{SKU명}_고객" 시트 목록에서 B1 상품코드로 메인 SKU와 매칭시킨 시트만 골라낸다.
-// (looksLikeTradeSheet_로 걸러진 시트, B1이 매칭 안 되는 시트는 제외)
+// (looksLikeCustomerSheet_를 통과 못한 시트, B1이 매칭 안 되는 시트는 제외)
 function findCustomerSheetsByCode_(ss, mainSkus) {
   const byCode = {};
   ss.getSheets().forEach((sheet) => {
@@ -511,7 +580,7 @@ function findCustomerSheetsByCode_(ss, mainSkus) {
 // --------------------------------------------------------------------
 // 진단 전용: 메인 SKU 9개 각각에 대해 "_고객" 시트가 실제로 존재하고, 신규/기존
 // 고객수 컬럼을 정상적으로 찾을 수 있는지 점검해서 실행 로그로만 남긴다.
-// readCustomerByProductSheets_와 완전히 동일한 판정 함수(looksLikeTradeSheet_,
+// readCustomerByProductSheets_와 완전히 동일한 판정 함수(looksLikeCustomerSheet_,
 // findDateBlocks_, resolveCustomerColumns_)를 사용하므로 로그와 실제 데이터가
 // 어긋날 일이 없다. data.json 내용에는 영향을 주지 않는다.
 // --------------------------------------------------------------------
@@ -531,8 +600,8 @@ function logCustomerSheetDiagnostics_(ss, mainSkus) {
     }
     const header = values[1];
     const dataRows = values.slice(2);
-    if (looksLikeTradeSheet_(header)) {
-      return { sku: sku.code, name: sku.name, sheet: sheetName, b1, dateBlocks: 0, dateRows: 0, verdict: "비정상(고객 데이터 시트 아님 — 거래현황류 헤더: " + JSON.stringify(header) + ")" };
+    if (!looksLikeCustomerSheet_(header)) {
+      return { sku: sku.code, name: sku.name, sheet: sheetName, b1, dateBlocks: 0, dateRows: 0, verdict: "비정상(고객 데이터 시트 아님 — '거래고객_신규/기존고객수' 헤더 없음, 실제 2행: " + JSON.stringify(header) + ")" };
     }
     const { dateCols, source } = findDateBlocks_(header, dataRows);
     let dateRows = 0;
@@ -565,7 +634,7 @@ function logCustomerSheetDiagnostics_(ss, mainSkus) {
 //   3행부터 데이터. 신규 SKU는 런칭 이전 구간의 날짜 행이 없을 수 있으며, 이는
 //   정상이므로 에러 없이 그냥 해당 날짜가 없는 것으로 처리한다(0으로 채우지 않음).
 // "3D아이크림_고객"처럼 이름만 "_고객"이고 실제로는 거래현황 헤더인 시트는
-// looksLikeTradeSheet_로 걸러내고 데이터를 추출하지 않는다.
+// looksLikeCustomerSheet_ 화이트리스트 검사를 통과하지 못해 데이터를 추출하지 않는다.
 function readCustomerByProductSheets_(ss, mainSkus) {
   const out = {};
   mainSkus.forEach((sku) => { out[sku.code] = {}; });
@@ -587,8 +656,8 @@ function readCustomerByProductSheets_(ss, mainSkus) {
     const header = values[1]; // 2행이 실제 헤더 (1행은 상품코드 라벨 행)
     const dataRows = values.slice(2); // 3행부터 데이터
 
-    if (looksLikeTradeSheet_(header)) {
-      report.push({ sku: sku.code, sheet: sheetName, dateRows: 0, note: "고객 데이터 시트 아님(거래현황류 헤더) — 제외" });
+    if (!looksLikeCustomerSheet_(header)) {
+      report.push({ sku: sku.code, sheet: sheetName, dateRows: 0, note: "고객 데이터 시트 아님('거래고객_신규/기존고객수' 헤더 없음) — 제외" });
       return;
     }
 

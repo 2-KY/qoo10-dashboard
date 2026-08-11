@@ -11,7 +11,7 @@ import {
 } from "./utils.js";
 import {
   kpiCardHTML, triCompareBarHTML, renderTabs, renderPills, renderAccordion,
-  skuBadgeHTML, estimateBadgeHTML,
+  skuBadgeHTML,
 } from "./components.js";
 
 const $ = (id) => document.getElementById(id);
@@ -290,8 +290,7 @@ function renderPromoTable(data, promo) {
     .map((row) => {
       const s = promoRowSeries(data, row, promo);
       if (!s) {
-        const mgmt = row.shop || row.base ? '<span class="sub">-</span>' : mgmtButtons(row);
-        return `<tr><td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td><td colspan="5" class="num tbd">데이터 없음</td><td>${mgmt}</td></tr>`;
+        return `<tr><td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td><td colspan="5" class="num tbd">데이터 없음</td></tr>`;
       }
       let curTxt, prevTxt, yoyTxt, prevDelta, yoyDelta;
       if (m.key === "newRatio") {
@@ -311,43 +310,17 @@ function renderPromoTable(data, promo) {
         prevDelta = pctDelta(s.cur[m.key], s.prev[m.key]);
         yoyDelta = pctDelta(s.cur[m.key], s.yoy[m.key]);
       }
-      const estTag = m.key === "totalInflow" ? estimateBadgeHTML(row.shop) : "";
-      const mgmt = row.shop || row.base ? '<span class="sub">-</span>' : mgmtButtons(row);
+      // PV(totalInflow)는 25)/26)SHOP_유입현황 BD열 기준 확정값이므로 "추정" 배지를 달지 않는다.
       return `<tr ${!row.shop && !row.base ? 'style="background:#FFFDF5;"' : ""}>
-        <td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}${estTag}</td>
+        <td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td>
         <td class="num" style="color:var(--cur); font-weight:700;">${curTxt}</td>
         <td class="num sub">${prevTxt}</td>
         <td class="num sub">${yoyTxt}</td>
         <td class="num">${m.pctType === "pp" ? deltaInlineHTML(prevDelta, true) : deltaInlineHTML(prevDelta)}</td>
         <td class="num">${m.pctType === "pp" ? deltaInlineHTML(yoyDelta, true) : deltaInlineHTML(yoyDelta)}</td>
-        <td>${mgmt}</td>
       </tr>`;
     })
     .join("");
-
-  bindMgmtButtons(data, promo, () => {
-    renderPromoTable(data, promo);
-    renderPromoFlowTable(data, promo);
-  });
-}
-
-function mgmtButtons(row) {
-  return `<button class="pin-btn ${row.pinned ? "pinned" : ""}" data-code="${row.code}">${row.pinned ? "📌 고정됨" : "📌 고정"}</button><button class="del-btn" data-code="${row.code}">삭제</button>`;
-}
-function bindMgmtButtons(data, promo, onChange) {
-  const list = promoAddedProductsByPromo[promo.id];
-  document.querySelectorAll("#promo-table .pin-btn").forEach((b) => {
-    b.onclick = () => {
-      const p = list.find((x) => x.code === b.dataset.code);
-      if (p) { p.pinned = !p.pinned; onChange(); }
-    };
-  });
-  document.querySelectorAll("#promo-table .del-btn").forEach((b) => {
-    b.onclick = () => {
-      promoAddedProductsByPromo[promo.id] = list.filter((x) => x.code !== b.dataset.code);
-      onChange();
-    };
-  });
 }
 
 function renderPromoFlowTable(data, promo) {
@@ -363,7 +336,7 @@ function renderPromoFlowTable(data, promo) {
         if (!s) return `<tr><td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td><td colspan="5" class="num tbd">데이터 없음</td></tr>`;
         const c = s.cur;
         return `<tr>
-          <td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}${estimateBadgeHTML(row.shop)}</td>
+          <td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td>
           <td class="num">${fmtNum(c.totalInflow)}</td>
           <td class="num">${fmtNum(c.internalInflow)}</td>
           <td class="num">${fmtPct(c.internalRatio, 0)}</td>
@@ -381,7 +354,7 @@ function renderPromoFlowTable(data, promo) {
         const cur = s.cur[curPromoFlowTab], prev = s.prev[curPromoFlowTab], yoy = s.yoy[curPromoFlowTab];
         const diff = cur - prev;
         return `<tr>
-          <td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}${estimateBadgeHTML(row.shop)}</td>
+          <td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td>
           <td class="num">${fmtNum(cur)}</td>
           <td class="num sub">${fmtNum(prev)}</td>
           <td class="num sub">${fmtNum(yoy)}</td>
@@ -568,13 +541,13 @@ export function renderInflow(data, promoId) {
         <div class="fl" style="color:var(--cur)">내부 유입</div>
         <div class="fv num">${fmtNum(cur.internalInflow)}</div>
         <div class="fshare">전체의 ${fmtPct(cur.internalRatio, 0)}</div>
-        <div class="flow-bar-outer"><div class="flow-bar-in" style="width:${cur.internalRatio}%"></div></div>
+        <div class="flow-bar-outer"><div class="flow-bar-in" style="width:${cur.internalRatio || 0}%"></div></div>
       </div>
       <div class="flow-card">
         <div class="fl" style="color:var(--prev)">외부 유입</div>
         <div class="fv num">${fmtNum(cur.externalInflow)}</div>
         <div class="fshare">전체의 ${fmtPct(cur.externalRatio, 0)}</div>
-        <div class="flow-bar-outer"><div class="flow-bar-ex" style="width:${cur.externalRatio}%"></div></div>
+        <div class="flow-bar-outer"><div class="flow-bar-ex" style="width:${cur.externalRatio || 0}%"></div></div>
       </div>`;
 
     const breakdown = buildChannelBreakdown(cur);

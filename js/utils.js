@@ -89,7 +89,7 @@ export function aggregateRows(rows) {
       newCustomers: 0, existingCustomers: 0, newRatio: null, existingRatio: null,
       totalInflow: 0, internalInflow: 0, externalInflow: 0,
       externalUrlDirect: 0, externalEtc: 0,
-      internalRatio: 0, externalRatio: 0, cvr: 0,
+      internalRatio: null, externalRatio: null, cvr: 0,
     };
   }
   const sum = (key) => rows.reduce((a, r) => a + (r[key] || 0), 0);
@@ -113,8 +113,9 @@ export function aggregateRows(rows) {
     newRatio: totalCustomers ? (newCustomers / totalCustomers) * 100 : null,
     existingRatio: totalCustomers ? (existingCustomers / totalCustomers) * 100 : null,
     totalInflow, internalInflow, externalInflow, externalUrlDirect, externalEtc,
-    internalRatio: totalInflow ? (internalInflow / totalInflow) * 100 : 0,
-    externalRatio: totalInflow ? (externalInflow / totalInflow) * 100 : 0,
+    // totalPV(분모)가 0이면 비중은 null(데이터 없음) — KY 확정 기준
+    internalRatio: totalInflow ? (internalInflow / totalInflow) * 100 : null,
+    externalRatio: totalInflow ? (externalInflow / totalInflow) * 100 : null,
     cvr: totalInflow ? (orders / totalInflow) * 100 : 0,
   };
 }
