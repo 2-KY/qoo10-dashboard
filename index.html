@@ -102,12 +102,12 @@
           <div class="add-sku">
             <input type="text" id="promo-add-input" placeholder="상품번호 입력 (예: 1043733766)">
             <button class="btn" id="promo-add-btn">+ 추가</button>
-            <span class="hint" style="margin:0 0 0 4px;">추가된 상품은 이 표와 아래 유입·전환율 표에 동시에 반영되며, "고정" 시 다음 조회부터 항상 표시됩니다</span>
+            <span class="hint" style="margin:0 0 0 4px;">추가된 상품은 이 표와 아래 유입 표에 동시에 반영되며, "고정" 시 다음 조회부터 항상 표시됩니다</span>
           </div>
         </div>
 
-        <div class="section-title">숍 전체 + 메인 SKU — 유입 및 구매전환율</div>
-        <div class="hint">※ SKU별 유입 및 구매전환율은 상품상세 PV 기준 추정치입니다. 숍 전체(실측)와 SKU(추정)는 값 옆 라벨로 구분해 표시합니다.</div>
+        <div class="section-title">숍 전체 + 메인 SKU — 유입</div>
+        <div class="hint">※ SKU별 유입은 상품상세 PV 기준 추정치입니다. 숍 전체(실측)와 SKU(추정)는 값 옆 라벨로 구분해 표시합니다. 구매전환율은 주문건수/유입 데이터 정확도가 확인될 때까지 표시하지 않습니다.</div>
         <div class="tabbar" id="promo-flow-tabs"></div>
         <div class="panel table-wrap" style="padding:8px 12px;">
           <table id="promo-flow-table">
@@ -130,12 +130,12 @@
         <div class="section-title">일자별 매출 추이 <span class="hint" style="display:inline; margin:0;">(선택한 일자가 진하게 표시됩니다)</span></div>
         <div class="panel"><div class="trend" id="trend-chart"></div></div>
 
-        <div class="section-title">숍 전체 + 메인 SKU — 선택 구간 실적 (매출·유입·전환율)</div>
+        <div class="section-title">숍 전체 + 메인 SKU — 선택 구간 실적 (매출·유입)</div>
         <div class="panel table-wrap" style="padding:8px 12px;">
           <table id="daily-table">
             <thead><tr>
               <th>구분</th><th>매출</th><th>주문건수</th><th>판매수량</th><th>UV</th><th>객단가</th>
-              <th>전체유입</th><th>내부유입</th><th>내부유입비중</th><th>외부유입</th><th>외부유입비중</th><th>구매전환율</th>
+              <th>전체유입</th><th>내부유입</th><th>내부유입비중</th><th>외부유입</th><th>외부유입비중</th>
             </tr></thead>
             <tbody></tbody>
           </table>

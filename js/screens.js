@@ -169,12 +169,14 @@ const promoAddedProductsByPromo = {};
 let curPromoMetric = "sales";
 let curPromoFlowTab = "all";
 
+// 구매전환율(cvr)은 분자(SKU 주문건수)·분모(유입 PV) 둘 다 정확도가 확인되지 않아
+// 임의 추정을 노출하지 않도록 탭에서 제외함 (계산 유틸 자체는 utils.js에 남겨둠 —
+// 원본 데이터 신뢰도가 확보되면 다시 추가).
 const PROMO_METRICS = [
   { key: "sales", label: "매출", type: "currency", pctType: "pct" },
   { key: "orders", label: "주문건수", type: "count", pctType: "pct" },
   { key: "qty", label: "판매수량", type: "count", pctType: "pct" },
   { key: "totalInflow", label: "유입", type: "count", pctType: "pct" },
-  { key: "cvr", label: "전환율", type: "percent", pctType: "pp" },
   { key: "newRatio", label: "신규・기존비중", type: "ratio", pctType: "pp" },
 ];
 
@@ -301,7 +303,7 @@ function renderPromoTable(data, promo) {
         prevDelta = pctDelta(s.cur[m.key], s.prev[m.key]);
         yoyDelta = pctDelta(s.cur[m.key], s.yoy[m.key]);
       }
-      const estTag = m.key === "totalInflow" || m.key === "cvr" ? estimateBadgeHTML(row.shop) : "";
+      const estTag = m.key === "totalInflow" ? estimateBadgeHTML(row.shop) : "";
       const mgmt = row.shop || row.base ? '<span class="sub">-</span>' : mgmtButtons(row);
       return `<tr ${!row.shop && !row.base ? 'style="background:#FFFDF5;"' : ""}>
         <td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}${estTag}</td>
@@ -346,11 +348,11 @@ function renderPromoFlowTable(data, promo) {
   const rows = promoAllRows(data, promo);
 
   if (curPromoFlowTab === "all") {
-    thead.innerHTML = `<tr><th>구분</th><th>전체유입</th><th>내부유입</th><th>내부유입비중</th><th>외부유입</th><th>외부유입비중</th><th>구매전환율(CVR)</th></tr>`;
+    thead.innerHTML = `<tr><th>구분</th><th>전체유입</th><th>내부유입</th><th>내부유입비중</th><th>외부유입</th><th>외부유입비중</th></tr>`;
     body.innerHTML = rows
       .map((row) => {
         const s = promoRowSeries(data, row, promo);
-        if (!s) return `<tr><td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td><td colspan="6" class="num tbd">데이터 없음</td></tr>`;
+        if (!s) return `<tr><td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td><td colspan="5" class="num tbd">데이터 없음</td></tr>`;
         const c = s.cur;
         return `<tr>
           <td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}${estimateBadgeHTML(row.shop)}</td>
@@ -359,7 +361,6 @@ function renderPromoFlowTable(data, promo) {
           <td class="num">${fmtPct(c.internalRatio, 0)}</td>
           <td class="num">${fmtNum(c.externalInflow)}</td>
           <td class="num">${fmtPct(c.externalRatio, 0)}</td>
-          <td class="num" style="color:var(--cur); font-weight:700;">${fmtPct(c.cvr, 2)}</td>
         </tr>`;
       })
       .join("");
@@ -437,7 +438,6 @@ export function renderDaily(data, promoId) {
       kpiCardHTML({ label: "내부유입비중", value: fmtPct(shopSel.internalRatio, 0), sizeSmall: true }),
       kpiCardHTML({ label: "외부유입", value: fmtNum(shopSel.externalInflow), sizeSmall: true }),
       kpiCardHTML({ label: "외부유입비중", value: fmtPct(shopSel.externalRatio, 0), sizeSmall: true }),
-      kpiCardHTML({ label: "구매전환율", value: fmtPct(shopSel.cvr, 2), sizeSmall: true }),
     ].join("");
 
     // 추이 차트 (일자별 매출, 누계 제외)
@@ -458,7 +458,7 @@ export function renderDaily(data, promoId) {
       .map((row) => {
         const arr = row.shop ? data.shopDaily : data.skuDaily[row.code];
         const s = seriesForOffset(arr, promo, selected);
-        if (!s) return `<tr><td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td><td colspan="11" class="num tbd">데이터 없음</td></tr>`;
+        if (!s) return `<tr><td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td><td colspan="10" class="num tbd">데이터 없음</td></tr>`;
         return `<tr>
           <td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td>
           <td class="num">${fmtYen(s.sales)}</td>
@@ -471,7 +471,6 @@ export function renderDaily(data, promoId) {
           <td class="num">${fmtPct(s.internalRatio, 0)}</td>
           <td class="num">${fmtNum(s.externalInflow)}</td>
           <td class="num">${fmtPct(s.externalRatio, 0)}</td>
-          <td class="num" style="color:var(--cur); font-weight:700;">${fmtPct(s.cvr, 2)}</td>
         </tr>`;
       })
       .join("");

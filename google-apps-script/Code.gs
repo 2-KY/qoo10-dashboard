@@ -367,7 +367,8 @@ function buildSkuDaily_(ss, mainSkus) {
       return {
         date: date,
         sales: t.sales, qty: t.qty,
-        orders: t.orders, // 거래현황 행 수 = 이 상품이 포함된 주문건수 (readTradeSheet_ 참고)
+        // SKU별 주문건수: 실측 불가 확인됨(아래 readTradeSheet_ 참고) — 임의 추정하지 않고 0으로 둔다.
+        orders: 0,
         // SKU 단위의 별도 UV(순방문자) 소스가 원본에 없어, 상품상세 PV(전체유입)를 UV 근사치로 사용
         // (숍 전체 UV는 SHOP_매출의 실측 UV 컬럼을 그대로 씀 — 이건 SKU에만 해당하는 추정치)
         uv: inf.totalInflow || 0,
@@ -384,10 +385,11 @@ function buildSkuDaily_(ss, mainSkus) {
 // 26)/25)SHOP_거래현황: B열(상품번호, 메인 SKU와 동일한 숫자 코드) = 매칭 키,
 // G열(취소분반영 거래금액) = 매출, J열(취소분반영 거래상품수량) = 판매수량
 // 판매자상품코드(yp****)는 메인 SKU 코드와 스킴이 달라 매칭 키로 쓰지 않는다(확인됨).
-// ⚠️ 주문건수(orders): 이 시트에 별도 "주문건수" 컬럼이 없어서, 거래현황 = 거래 1건당
-// 1행 구조라는 전제로 (상품코드, 날짜)별 매칭 행 수를 주문건수로 집계한다. 하나의
-// 실제 주문에 이 상품이 여러 줄로 쪼개져 있는 등 시트 구조가 다르면 부정확할 수 있으니
-// 원본에서 특정 SKU·날짜의 실제 주문건수와 한 번 대조 확인을 권장한다.
+// ⚠️ 주문건수: 한때 "행 수 = 주문건수"로 근사했었으나, 실데이터로 확인해보니 이
+// 시트는 이미 (상품코드, 날짜)별로 하루치가 사전 합산된 표라서 모든 SKU에서
+// "행 수 = 활동일수"로 고정되어 버려 실제 주문건수와 무관했다(틀린 근사였음).
+// 이 시트엔 진짜 주문건수 컬럼이 없어 SKU별 주문건수는 산출하지 않는다
+// (buildSkuDaily_에서 orders: 0으로 고정 — 원본에 정확한 컬럼이 확인되면 연결).
 function readTradeSheet_(ss, sheetName) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return {};
@@ -396,7 +398,7 @@ function readTradeSheet_(ss, sheetName) {
   const idx = (name) => requireCol_(header, name, sheetName);
   const cDate = idx("날짜"), cCode = idx("상품번호"), cSalesAdj = idx("취소분반영 거래금액"), cQtyAdj = idx("취소분반영 거래상품수량");
 
-  const out = {}; // code -> date -> {sales, qty, orders}
+  const out = {}; // code -> date -> {sales, qty}
   let scanned = 0, matched = 0;
   const sampleCodes = [];
   for (let i = 1; i < values.length; i++) {
@@ -410,11 +412,9 @@ function readTradeSheet_(ss, sheetName) {
     if (!out[code]) out[code] = {};
     const prevSales = (out[code][date] && out[code][date].sales) || 0;
     const prevQty = (out[code][date] && out[code][date].qty) || 0;
-    const prevOrders = (out[code][date] && out[code][date].orders) || 0;
     out[code][date] = {
       sales: prevSales + (Number(row[cSalesAdj]) || 0),
       qty: prevQty + (Number(row[cQtyAdj]) || 0),
-      orders: prevOrders + 1,
     };
   }
   Logger.log('[readTradeSheet_] "' + sheetName + '" ' + scanned + '행 스캔, ' + matched + '행 반영. 상품번호 샘플: ' + JSON.stringify(sampleCodes));
