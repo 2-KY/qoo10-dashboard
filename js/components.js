@@ -3,7 +3,7 @@
  * 모든 화면(screens.js)에서 공통으로 사용하는 시그니처 요소(트리플 비교 바),
  * 탭, 필/아코디언 등을 이곳에 모아 중복을 줄입니다.
  */
-import { deltaChipHTML } from "./utils.js";
+import { deltaChipHTML, deltaInlineHTML, pctDelta, ppDelta } from "./utils.js";
 
 export function kpiCardHTML({ label, value, prevPct = null, yoyPct = null, isPP = false, sizeSmall = false }) {
   const chips =
@@ -18,18 +18,62 @@ export function kpiCardHTML({ label, value, prevPct = null, yoyPct = null, isPP 
 }
 
 // 시그니처 요소: 금번/직전/전년 트리플 비교 바
+// cur/prev/yoy는 null일 수 있음(직전·전년 기간이 프로모션_항목에 정의되지 않았거나
+// 해당 구간에 실적 데이터가 없는 경우) — 이 경우 바 길이는 0으로 그리되,
+// 값 텍스트는 fmt()가 그대로 "—"로 표시하도록 둔다(0과 데이터 없음을 혼동하지 않기 위함).
 export function triCompareBarHTML({ label, cur, prev, yoy, fmt, prevPct, yoyPct, isPP = false }) {
-  const max = Math.max(cur, prev, yoy, 1);
+  const safe = (v) => (v === null || v === undefined || isNaN(v) ? 0 : v);
+  const max = Math.max(safe(cur), safe(prev), safe(yoy), 1);
   return `<div class="kpi-card">
     <div class="kpi-label">${label}</div>
     <div class="kpi-value num">${fmt(cur)}</div>
     <div class="kpi-sub">${deltaChipHTML(prevPct, isPP)}${deltaChipHTML(yoyPct, isPP)}</div>
     <div class="tri">
-      <div class="tri-row"><span class="tri-tag">금번</span><div class="tri-track"><div class="tri-fill cur" style="width:${(cur / max) * 100}%"></div></div><span class="tri-val num">${fmt(cur)}</span></div>
-      <div class="tri-row"><span class="tri-tag">직전</span><div class="tri-track"><div class="tri-fill prev" style="width:${(prev / max) * 100}%"></div></div><span class="tri-val num">${fmt(prev)}</span></div>
-      <div class="tri-row"><span class="tri-tag">전년</span><div class="tri-track"><div class="tri-fill yoy" style="width:${(yoy / max) * 100}%"></div></div><span class="tri-val num">${fmt(yoy)}</span></div>
+      <div class="tri-row"><span class="tri-tag">금번</span><div class="tri-track"><div class="tri-fill cur" style="width:${(safe(cur) / max) * 100}%"></div></div><span class="tri-val num">${fmt(cur)}</span></div>
+      <div class="tri-row"><span class="tri-tag">직전</span><div class="tri-track"><div class="tri-fill prev" style="width:${(safe(prev) / max) * 100}%"></div></div><span class="tri-val num">${fmt(prev)}</span></div>
+      <div class="tri-row"><span class="tri-tag">전년</span><div class="tri-track"><div class="tri-fill yoy" style="width:${(safe(yoy) / max) * 100}%"></div></div><span class="tri-val num">${fmt(yoy)}</span></div>
     </div>
   </div>`;
+}
+
+// ----------------------------------------------------------------
+// 지표를 세로로, 비교 기준(금번/직전/전년/…)을 가로로 배치하는 표준 비교표.
+// 열 순서 고정: 구분 | 금번 | 직전 | 전년 | 직전차 | 직전비 | 전년차 | 전년비
+// (KY 확정 — 순서 변경 금지). metrics[i] = { label, cur, prev, yoy, fmt, isPP }
+// cur/prev/yoy가 null이면 "데이터 없음"으로 처리하고 증감도 계산하지 않는다
+// (0으로 대체하지 않음 — "프로모션 일별 분석" 화면의 금번/직전/전년 비교표 전용).
+// ----------------------------------------------------------------
+function hasVal(v) {
+  return v !== null && v !== undefined && !isNaN(v);
+}
+function fmtDiff(diff, fmt, isPP) {
+  if (diff === null) return "—";
+  const sign = diff >= 0 ? "+" : "";
+  return isPP ? `${sign}${diff.toFixed(1)}%p` : `${sign}${fmt(diff)}`;
+}
+export function renderMetricCompareRows(tbody, metrics) {
+  tbody.innerHTML = metrics
+    .map((m) => {
+      const { label, cur, prev, yoy, fmt, isPP = false } = m;
+      const curTxt = hasVal(cur) ? fmt(cur) : "—";
+      const prevTxt = hasVal(prev) ? fmt(prev) : "—";
+      const yoyTxt = hasVal(yoy) ? fmt(yoy) : "—";
+      const prevDiff = hasVal(cur) && hasVal(prev) ? cur - prev : null;
+      const yoyDiff = hasVal(cur) && hasVal(yoy) ? cur - yoy : null;
+      const prevPct = prevDiff === null ? null : isPP ? ppDelta(cur, prev) : pctDelta(cur, prev);
+      const yoyPct = yoyDiff === null ? null : isPP ? ppDelta(cur, yoy) : pctDelta(cur, yoy);
+      return `<tr>
+        <td class="name">${label}</td>
+        <td class="num" style="color:var(--cur); font-weight:700;">${curTxt}</td>
+        <td class="num sub">${prevTxt}</td>
+        <td class="num sub">${yoyTxt}</td>
+        <td class="num">${fmtDiff(prevDiff, fmt, isPP)}</td>
+        <td class="num">${deltaInlineHTML(prevPct, isPP)}</td>
+        <td class="num">${fmtDiff(yoyDiff, fmt, isPP)}</td>
+        <td class="num">${deltaInlineHTML(yoyPct, isPP)}</td>
+      </tr>`;
+    })
+    .join("");
 }
 
 // 탭 바: container에 렌더링하고 클릭 이벤트를 바인딩

@@ -174,6 +174,43 @@ export function aggregateByDayOffset(dailyArr, rangeStart, rangeEnd) {
 }
 
 // ---------------------------------------------------------------
+// 기간 유효성 검사 — 프로모션_항목에 직전/전년 기간이 입력되지 않은 경우
+// Code.gs가 "-" 또는 빈 문자열을 내려보낸다(실측 확인됨: public-data/data.json에서
+// 39개 프로모션 중 21개가 직전 기간 "-"). 이 경우 "기간 자체가 없음"이며,
+// 이를 날짜 범위로 잘못 해석해 0으로 집계하면 "실제 0"과 구분이 안 되므로
+// 반드시 무효 기간으로 먼저 걸러낸다.
+// ---------------------------------------------------------------
+export function isValidPeriod(period) {
+  if (!period) return false;
+  const { start, end } = period;
+  return !!start && !!end && start !== "-" && end !== "-";
+}
+
+// 유효한 기간이면서 실제로 매칭되는 daily 행이 1개 이상 있을 때만 집계 결과를 반환.
+// 무효 기간이거나(직전/전년 미정의) 유효 기간이지만 원본 daily 배열에 해당 날짜
+// 범위 자체가 없는 경우(수집 이전/이후) 둘 다 null을 반환해 "데이터 없음"과
+// "값이 0"을 프론트에서 구분할 수 있게 한다.
+export function aggregateRangeOrNull(dailyArr, period) {
+  if (!isValidPeriod(period)) return null;
+  const rows = filterRange(dailyArr, period.start, period.end);
+  if (rows.length === 0) return null;
+  return aggregateRows(rows);
+}
+
+// 프로모션 경과일(offset) 기준 금번/직전/전년 공통 조회.
+// offsetIndex 0 = 누계(기간 전체), offsetIndex n(>=1) = 그 기간의 시작일로부터
+// (n-1)일째 되는 날의 daily 행. 각 기간(period)은 자기 자신의 start를 기준으로
+// 오프셋을 셈 — 달력상 같은 날짜가 아니라 "같은 경과일"을 비교하기 위함
+// (KY 요구사항: 프로모션_항목의 실제 날짜만 사용, 임의 계산 금지).
+export function seriesForOffsetOrNull(dailyArr, period, offsetIndex) {
+  if (!dailyArr || !isValidPeriod(period)) return null;
+  if (offsetIndex === 0) return aggregateRangeOrNull(dailyArr, period);
+  const rows = rowsForDayOffset(dailyArr, period.start, offsetIndex - 1);
+  if (rows.length === 0) return null;
+  return aggregateRows(rows);
+}
+
+// ---------------------------------------------------------------
 // SKU 매출비중 공통 분모 — "메인 SKU 전체 합계 매출" (연간 화면은 연간 합계,
 // 월별 화면은 월 합계로 각각 호출). 화면마다 따로 계산하면 나중에 한쪽만 고치고
 // 다른 쪽을 놓치는 문제가 생기므로 하나의 함수로 통일한다.

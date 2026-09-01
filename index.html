@@ -124,22 +124,32 @@
       <div class="screen" data-screen="daily">
         <div class="section-title" id="daily-title">프로모션 일별 분석</div>
         <div class="hint" id="daily-halfday-hint" style="display:none;"></div>
+        <div class="promo-hero" id="daily-periods"></div>
+
         <div class="day-pills" id="day-pills"></div>
 
+        <div class="section-title">선택 일차 핵심 KPI</div>
+        <div class="legend"><span><i class="c-cur"></i>금번</span><span><i class="c-prev"></i>직전</span><span><i class="c-yoy"></i>전년</span></div>
         <div class="kpi-grid flow" id="daily-kpi"></div>
 
-        <div class="section-title">일자별 매출 추이 <span class="hint" style="display:inline; margin:0;">(선택한 일자가 진하게 표시됩니다)</span></div>
+        <div class="section-title">일자별 매출 추이 — 금번 · 직전 · 전년 <span class="hint" style="display:inline; margin:0;">(동일 프로모션 경과일 기준 비교, 선택한 일자가 진하게 표시됩니다)</span></div>
         <div class="panel"><div class="trend" id="trend-chart"></div></div>
 
-        <div class="section-title">숍 전체 + 메인 SKU — 선택 구간 실적 (매출·유입·고객)</div>
-        <div class="hint">숍 전체는 SHOP_매출/SHOP_유입현황의 실측치, SKU는 상품별 거래·유입·고객 시트의 실측치입니다(SKU의 UV/PV열은 원본에 UV 소스가 없어 PV로 대체한 추정치 — 값에 "(PV)" 표기). SKU 신규·기존고객은 대응하는 "{상품명}_고객" 시트가 없으면 "—"로 표시됩니다.</div>
+        <div class="section-title">숍 전체 상세 비교표</div>
+        <div class="hint" id="daily-shop-hint">숍 전체는 SHOP_매출/SHOP_유입현황의 실측치입니다. "—"는 해당 구간에 데이터가 없음을 의미하며 0과 다릅니다.</div>
         <div class="panel table-wrap" style="padding:8px 12px;">
-          <table id="daily-table">
-            <thead><tr>
-              <th>구분</th><th>매출</th><th>주문건수</th><th>판매수량</th><th>UV/PV</th><th>객단가</th>
-              <th>전체 PV</th><th>내부유입</th><th>내부유입비중</th><th>외부유입</th><th>외부유입비중</th>
-              <th>신규고객수</th><th>기존고객수</th><th>신규비중</th><th>기존비중</th>
-            </tr></thead>
+          <table id="daily-shop-table">
+            <thead><tr><th>구분</th><th>금번</th><th>직전</th><th>전년</th><th>직전차</th><th>직전비</th><th>전년차</th><th>전년비</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="section-title">메인 SKU 9개 <span class="hint" style="display:inline; margin:0;">(상품을 선택하면 아래에 상세 비교표가 표시됩니다)</span></div>
+        <div class="tabbar" id="daily-sku-tabs"></div>
+        <div class="hint" id="daily-sku-hint">매출비중 = 해당 SKU 매출 ÷ 숍 전체 매출. SKU 단위는 원본에 UV/주문건수 컬럼이 없어 표시하지 않으며, 유입은 상품상세 PV 실측치입니다. 고객 데이터가 없는 SKU는 "—"로 표시됩니다.</div>
+        <div class="panel table-wrap" style="padding:8px 12px;">
+          <table id="daily-sku-table">
+            <thead><tr><th>구분</th><th>금번</th><th>직전</th><th>전년</th><th>직전차</th><th>직전비</th><th>전년차</th><th>전년비</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>

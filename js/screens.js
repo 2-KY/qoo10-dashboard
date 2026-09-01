@@ -8,10 +8,11 @@ import {
   fmtYen, fmtNum, fmtPct, pctDelta, ppDelta, deltaChipHTML, deltaInlineHTML,
   aggregateRange, aggregateMonth, aggregateYear, aggregateRows,
   rowsForDayOffset, daysBetween, buildPromoDayLabels, resolveMainSkus, sumMainSkuSales,
+  isValidPeriod, aggregateRangeOrNull, seriesForOffsetOrNull,
 } from "./utils.js";
 import {
   kpiCardHTML, triCompareBarHTML, renderTabs, renderPills, renderAccordion,
-  skuBadgeHTML,
+  skuBadgeHTML, renderMetricCompareRows,
 } from "./components.js";
 
 const $ = (id) => document.getElementById(id);
@@ -369,9 +370,20 @@ function renderPromoFlowTable(data, promo) {
 
 /* ================================================================
    4. 프로모션 일별 분석
+   금번/직전/전년을 "동일 프로모션 경과일" 기준으로 비교한다.
+   직전/전년 날짜는 반드시 프로모션_항목에 저장된 실제 값(promo.previous/.yoy)만
+   사용하며, 정의되지 않은 경우("-") 임의 날짜를 만들지 않고 "—"로 표시한다.
    ================================================================ */
 let curDailyOffsetIndex = {}; // promoId -> selected pill index (0=누계)
+let curDailySkuCode = {}; // promoId -> selected SKU code
 
+function hasVal(v) {
+  return v !== null && v !== undefined && !isNaN(v);
+}
+
+// 금번(promo.current)은 항상 실제 선택된 프로모션 기간이므로 기존 방식 그대로
+// 유지한다(기간이 짧아 해당 offset에 행이 없으면 0으로 집계 — 기존 화면과 동일한
+// 값을 보장하기 위해 이 함수는 변경하지 않는다).
 function seriesForOffset(dailyArr, promo, offsetIndex) {
   if (!dailyArr) return null;
   if (offsetIndex === 0) return aggregateRange(dailyArr, promo.current.start, promo.current.end);
@@ -386,17 +398,34 @@ export function renderDaily(data, promoId) {
   const hint = $("daily-halfday-hint");
   if (promo.isHalfDayFirst) {
     hint.style.display = "block";
-    hint.innerHTML = `※ ${promo.name}는 첫날 17시부터 진행되어 <b>0.5일차</b>로 카운트합니다 (다른 프로모션은 1일차부터 정상 카운트)`;
+    hint.innerHTML = `※ ${promo.name}는 첫날 17시부터 진행되어 <b>0.5일차</b>로 카운트합니다 (다른 프로모션은 1일차부터 정상 카운트). 이 기준은 금번뿐 아니라 직전·전년 각 기간의 시작일에도 동일하게 적용되어, "0.5일차" 행은 세 기간 각각의 시작일 데이터를 나란히 비교합니다.`;
   } else {
     hint.style.display = "none";
   }
 
-  const dayLabels = buildPromoDayLabels(promo); // ["누계","1일차"/"0.5일차",...]
+  // 금번/직전/전년 비교 기간 표시 — 프로모션_항목에 실제로 입력된 값만 사용
+  const prevValid = isValidPeriod(promo.previous);
+  const yoyValid = isValidPeriod(promo.yoy);
+  $("daily-periods").innerHTML = `
+    <div class="titles">
+      <div class="eyebrow">비교 기간 (프로모션_항목 기준)</div>
+      <h2>${promo.year}년 ${promo.month}월 · ${promo.name}</h2>
+      <div class="periods">
+        <span class="period"><i class="dotc" style="background:var(--cur)"></i>금번 <b>${promo.current.start} ~ ${promo.current.end}</b></span>
+        <span class="period"><i class="dotc" style="background:var(--prev)"></i>직전${promo.previous.label ? "(" + promo.previous.label + ")" : ""} <b>${prevValid ? `${promo.previous.start} ~ ${promo.previous.end}` : "정의되지 않음"}</b></span>
+        <span class="period"><i class="dotc" style="background:var(--yoy)"></i>전년 <b>${yoyValid ? `${promo.yoy.start} ~ ${promo.yoy.end}` : "정의되지 않음"}</b></span>
+      </div>
+    </div>`;
+
+  const dayLabels = buildPromoDayLabels(promo); // ["누계","0.5일차"/"1일차",...] — 금번 기간 길이 기준(기존과 동일)
   if (curDailyOffsetIndex[promo.id] === undefined) {
     curDailyOffsetIndex[promo.id] = dayLabels.length > 1 ? 1 : 0;
   }
 
   const mainSkus = resolveMainSkus(data, promo.id);
+  if (curDailySkuCode[promo.id] === undefined) {
+    curDailySkuCode[promo.id] = mainSkus[0] ? mainSkus[0].code : null;
+  }
 
   function draw() {
     const selected = curDailyOffsetIndex[promo.id];
@@ -405,61 +434,137 @@ export function renderDaily(data, promoId) {
       draw();
     });
 
-    const shopSel = seriesForOffset(data.shopDaily, promo, selected);
-    $("daily-kpi").innerHTML = [
-      kpiCardHTML({ label: "매출", value: fmtYen(shopSel.sales), sizeSmall: true }),
-      kpiCardHTML({ label: "주문건수", value: fmtNum(shopSel.orders) + "건", sizeSmall: true }),
-      kpiCardHTML({ label: "판매수량", value: fmtNum(shopSel.qty) + "개", sizeSmall: true }),
-      kpiCardHTML({ label: "UV", value: fmtNum(shopSel.uv), sizeSmall: true }),
-      kpiCardHTML({ label: "객단가", value: fmtYen(shopSel.aov), sizeSmall: true }),
-      kpiCardHTML({ label: "신규비중", value: fmtPct(shopSel.newRatio, 0), sizeSmall: true }),
-      kpiCardHTML({ label: "기존비중", value: fmtPct(shopSel.existingRatio, 0), sizeSmall: true }),
-      kpiCardHTML({ label: "전체 PV", value: fmtNum(shopSel.totalInflow), sizeSmall: true }),
-      kpiCardHTML({ label: "내부유입", value: fmtNum(shopSel.internalInflow), sizeSmall: true }),
-      kpiCardHTML({ label: "내부유입비중", value: fmtPct(shopSel.internalRatio, 0), sizeSmall: true }),
-      kpiCardHTML({ label: "외부유입", value: fmtNum(shopSel.externalInflow), sizeSmall: true }),
-      kpiCardHTML({ label: "외부유입비중", value: fmtPct(shopSel.externalRatio, 0), sizeSmall: true }),
-    ].join("");
+    // ---- 선택 일차의 숍 전체 금번/직전/전년 집계 ----
+    const shopCur = seriesForOffset(data.shopDaily, promo, selected);
+    const shopPrev = seriesForOffsetOrNull(data.shopDaily, promo.previous, selected);
+    const shopYoy = seriesForOffsetOrNull(data.shopDaily, promo.yoy, selected);
 
-    // 추이 차트 (일자별 매출, 누계 제외)
-    const perDaySales = dayLabels.slice(1).map((_, i) => seriesForOffset(data.shopDaily, promo, i + 1).sales);
-    const maxV = Math.max(...perDaySales, 1);
-    $("trend-chart").innerHTML = dayLabels
-      .slice(1)
+    // ---- 상단 핵심 KPI — 트리플 비교 카드 ----
+    const kpiDefs = [
+      { label: "매출", key: "sales", fmt: fmtYen },
+      { label: "주문건수", key: "orders", fmt: (v) => fmtNum(v) + "건" },
+      { label: "판매수량", key: "qty", fmt: (v) => fmtNum(v) + "개" },
+      { label: "UV", key: "uv", fmt: fmtNum },
+      { label: "객단가", key: "aov", fmt: fmtYen },
+      { label: "신규비중", key: "newRatio", fmt: (v) => fmtPct(v, 0), isPP: true },
+      { label: "기존비중", key: "existingRatio", fmt: (v) => fmtPct(v, 0), isPP: true },
+      { label: "전체 PV", key: "totalInflow", fmt: fmtNum },
+      { label: "내부유입", key: "internalInflow", fmt: fmtNum },
+      { label: "내부유입비중", key: "internalRatio", fmt: (v) => fmtPct(v, 0), isPP: true },
+      { label: "외부유입", key: "externalInflow", fmt: fmtNum },
+      { label: "외부유입비중", key: "externalRatio", fmt: (v) => fmtPct(v, 0), isPP: true },
+    ];
+    $("daily-kpi").innerHTML = kpiDefs
+      .map((k) => {
+        const cur = shopCur ? shopCur[k.key] : null;
+        const prev = shopPrev ? shopPrev[k.key] : null;
+        const yoy = shopYoy ? shopYoy[k.key] : null;
+        const prevPct = hasVal(cur) && hasVal(prev) ? (k.isPP ? ppDelta(cur, prev) : pctDelta(cur, prev)) : null;
+        const yoyPct = hasVal(cur) && hasVal(yoy) ? (k.isPP ? ppDelta(cur, yoy) : pctDelta(cur, yoy)) : null;
+        return triCompareBarHTML({ label: k.label, cur, prev, yoy, fmt: k.fmt, prevPct, yoyPct, isPP: !!k.isPP });
+      })
+      .join("");
+
+    // ---- 일자별 매출 추이: 금번/직전/전년, 동일 경과일 기준 ----
+    const perDayLabels = dayLabels.slice(1); // 누계 제외
+    const curDaily = perDayLabels.map((_, i) => seriesForOffset(data.shopDaily, promo, i + 1).sales);
+    const prevDaily = perDayLabels.map((_, i) => {
+      const s = seriesForOffsetOrNull(data.shopDaily, promo.previous, i + 1);
+      return s ? s.sales : null;
+    });
+    const yoyDaily = perDayLabels.map((_, i) => {
+      const s = seriesForOffsetOrNull(data.shopDaily, promo.yoy, i + 1);
+      return s ? s.sales : null;
+    });
+    const maxV = Math.max(...curDaily, ...prevDaily.filter(hasVal), ...yoyDaily.filter(hasVal), 1);
+    const bar = (v, cls) => {
+      if (!hasVal(v)) return `<div class="bar ${cls} empty" title="데이터 없음"></div>`;
+      const h = Math.max(2, Math.round((v / maxV) * 100));
+      return `<div class="bar ${cls}" style="height:${h}px;"></div>`;
+    };
+    $("trend-chart").innerHTML = perDayLabels
       .map((lbl, i) => {
-        const h = Math.max(2, Math.round((perDaySales[i] / maxV) * 100));
         const isSel = selected === i + 1;
-        return `<div class="bar-wrap"><div class="bar ${isSel ? "sel" : ""}" style="height:${h}px;"></div><div class="lbl">${lbl.replace("일차", "")}</div></div>`;
+        return `<div class="bar-wrap"><div class="bar-group ${isSel ? "sel" : ""}">${bar(curDaily[i], "b-cur")}${bar(prevDaily[i], "b-prev")}${bar(yoyDaily[i], "b-yoy")}</div><div class="lbl">${lbl.replace("일차", "")}</div></div>`;
       })
       .join("");
 
-    // 숍전체 + 메인 SKU 표
-    const rows = [{ name: "숍 전체", code: null, shop: true }, ...mainSkus.map((s) => ({ name: s.name, code: s.code, shop: false }))];
-    $("daily-table").querySelector("tbody").innerHTML = rows
-      .map((row) => {
-        const arr = row.shop ? data.shopDaily : data.skuDaily[row.code];
-        const s = seriesForOffset(arr, promo, selected);
-        if (!s) return `<tr><td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td><td colspan="14" class="num tbd">데이터 없음</td></tr>`;
-        const uvTxt = row.shop ? fmtNum(s.uv) : `${fmtNum(s.uv)} (PV)`; // 숍 전체=실측 UV, SKU=PV 추정치
-        return `<tr>
-          <td class="name">${row.shop ? "<b>숍 전체</b>" : row.name}${skuBadgeHTML(row.code)}</td>
-          <td class="num">${fmtYen(s.sales)}</td>
-          <td class="num">${fmtNum(s.orders)}</td>
-          <td class="num">${fmtNum(s.qty)}</td>
-          <td class="num">${uvTxt}</td>
-          <td class="num">${fmtYen(s.aov)}</td>
-          <td class="num">${fmtNum(s.totalInflow)}</td>
-          <td class="num">${fmtNum(s.internalInflow)}</td>
-          <td class="num">${fmtPct(s.internalRatio, 0)}</td>
-          <td class="num">${fmtNum(s.externalInflow)}</td>
-          <td class="num">${fmtPct(s.externalRatio, 0)}</td>
-          <td class="num">${fmtNum(s.newCustomers)}</td>
-          <td class="num">${fmtNum(s.existingCustomers)}</td>
-          <td class="num">${fmtPct(s.newRatio, 0)}</td>
-          <td class="num">${fmtPct(s.existingRatio, 0)}</td>
-        </tr>`;
-      })
-      .join("");
+    // ---- 숍 전체 상세 비교표 ----
+    const shopMetrics = [
+      { label: "매출", key: "sales", fmt: fmtYen },
+      { label: "주문건수", key: "orders", fmt: (v) => fmtNum(v) + "건" },
+      { label: "판매수량", key: "qty", fmt: (v) => fmtNum(v) + "개" },
+      { label: "UV", key: "uv", fmt: fmtNum },
+      { label: "객단가", key: "aov", fmt: fmtYen },
+      { label: "전체 PV", key: "totalInflow", fmt: fmtNum },
+      { label: "내부유입 PV", key: "internalInflow", fmt: fmtNum },
+      { label: "외부유입 PV", key: "externalInflow", fmt: fmtNum },
+      { label: "신규고객", key: "newCustomers", fmt: fmtNum },
+      { label: "신규고객비중", key: "newRatio", fmt: (v) => fmtPct(v, 0), isPP: true },
+      { label: "기존고객", key: "existingCustomers", fmt: fmtNum },
+      { label: "기존고객비중", key: "existingRatio", fmt: (v) => fmtPct(v, 0), isPP: true },
+    ];
+    renderMetricCompareRows(
+      $("daily-shop-table").querySelector("tbody"),
+      shopMetrics.map((m) => ({
+        label: m.label,
+        cur: shopCur ? shopCur[m.key] : null,
+        prev: shopPrev ? shopPrev[m.key] : null,
+        yoy: shopYoy ? shopYoy[m.key] : null,
+        fmt: m.fmt,
+        isPP: !!m.isPP,
+      }))
+    );
+
+    // ---- 메인 SKU 9개 선택 버튼 + 선택 SKU 상세 비교표 ----
+    function drawSku() {
+      const code = curDailySkuCode[promo.id];
+      const sku = mainSkus.find((s) => s.code === code);
+      const arr = code ? data.skuDaily[code] : null;
+      const tbody = $("daily-sku-table").querySelector("tbody");
+
+      if (!arr) {
+        tbody.innerHTML = `<tr><td class="name">${sku ? sku.name : code || "-"}</td><td colspan="7" class="num tbd">이 상품에 대한 데이터가 없습니다</td></tr>`;
+        return;
+      }
+
+      const skuCur = seriesForOffset(arr, promo, selected);
+      const skuPrev = seriesForOffsetOrNull(arr, promo.previous, selected);
+      const skuYoy = seriesForOffsetOrNull(arr, promo.yoy, selected);
+
+      // 매출비중 = SKU 매출 ÷ 숍 전체 매출 (동일 기간, 동일 집계 함수 기준 — KY 확정)
+      const shareOf = (skuAgg, shopAgg) =>
+        skuAgg && shopAgg && shopAgg.sales ? (skuAgg.sales / shopAgg.sales) * 100 : null;
+      const shareCur = shareOf(skuCur, shopCur);
+      const sharePrev = shareOf(skuPrev, shopPrev);
+      const shareYoy = shareOf(skuYoy, shopYoy);
+
+      const g = (agg, key) => (agg && hasVal(agg[key]) ? agg[key] : null);
+      const skuMetrics = [
+        { label: "매출", cur: g(skuCur, "sales"), prev: g(skuPrev, "sales"), yoy: g(skuYoy, "sales"), fmt: fmtYen },
+        { label: "매출비중", cur: shareCur, prev: sharePrev, yoy: shareYoy, fmt: (v) => fmtPct(v, 1), isPP: true },
+        { label: "판매수량", cur: g(skuCur, "qty"), prev: g(skuPrev, "qty"), yoy: g(skuYoy, "qty"), fmt: (v) => fmtNum(v) + "개" },
+        { label: "전체유입 PV", cur: g(skuCur, "totalInflow"), prev: g(skuPrev, "totalInflow"), yoy: g(skuYoy, "totalInflow"), fmt: fmtNum },
+        { label: "내부유입 PV", cur: g(skuCur, "internalInflow"), prev: g(skuPrev, "internalInflow"), yoy: g(skuYoy, "internalInflow"), fmt: fmtNum },
+        { label: "외부유입 PV", cur: g(skuCur, "externalInflow"), prev: g(skuPrev, "externalInflow"), yoy: g(skuYoy, "externalInflow"), fmt: fmtNum },
+        { label: "신규고객", cur: g(skuCur, "newCustomers"), prev: g(skuPrev, "newCustomers"), yoy: g(skuYoy, "newCustomers"), fmt: fmtNum },
+        { label: "신규고객비중", cur: g(skuCur, "newRatio"), prev: g(skuPrev, "newRatio"), yoy: g(skuYoy, "newRatio"), fmt: (v) => fmtPct(v, 0), isPP: true },
+        { label: "기존고객", cur: g(skuCur, "existingCustomers"), prev: g(skuPrev, "existingCustomers"), yoy: g(skuYoy, "existingCustomers"), fmt: fmtNum },
+        { label: "기존고객비중", cur: g(skuCur, "existingRatio"), prev: g(skuPrev, "existingRatio"), yoy: g(skuYoy, "existingRatio"), fmt: (v) => fmtPct(v, 0), isPP: true },
+      ];
+      renderMetricCompareRows(tbody, skuMetrics);
+    }
+
+    renderTabs(
+      $("daily-sku-tabs"),
+      mainSkus.map((s) => ({ key: s.code, label: s.name })),
+      curDailySkuCode[promo.id],
+      (key) => {
+        curDailySkuCode[promo.id] = key;
+        drawSku();
+      }
+    );
+    drawSku();
   }
   draw();
 }
