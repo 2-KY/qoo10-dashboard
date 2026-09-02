@@ -51,29 +51,31 @@ function fmtDiff(diff, fmt, isPP) {
   const sign = diff >= 0 ? "+" : "";
   return isPP ? `${sign}${diff.toFixed(1)}%p` : `${sign}${fmt(diff)}`;
 }
+// 지표 하나(한 행)만 <tr> 문자열로 만든다 — renderMetricCompareRows의 내부 로직을
+// 그대로 재사용하되, 그룹 헤더 행 등 다른 행과 섞어서 렌더링해야 하는 화면(유입 분석의
+// 채널 그룹 목록 등)에서 tbody 전체가 아니라 행 단위로 필요할 때 쓴다.
+export function metricRowHTML(m) {
+  const { label, cur, prev, yoy, fmt, isPP = false, indent = false } = m;
+  const curTxt = hasVal(cur) ? fmt(cur) : "—";
+  const prevTxt = hasVal(prev) ? fmt(prev) : "—";
+  const yoyTxt = hasVal(yoy) ? fmt(yoy) : "—";
+  const prevDiff = hasVal(cur) && hasVal(prev) ? cur - prev : null;
+  const yoyDiff = hasVal(cur) && hasVal(yoy) ? cur - yoy : null;
+  const prevPct = prevDiff === null ? null : isPP ? ppDelta(cur, prev) : pctDelta(cur, prev);
+  const yoyPct = yoyDiff === null ? null : isPP ? ppDelta(cur, yoy) : pctDelta(cur, yoy);
+  return `<tr>
+    <td class="name"${indent ? ' style="padding-left:32px; color:var(--text-sub); font-weight:500;"' : ""}>${label}</td>
+    <td class="num" style="color:var(--cur); font-weight:700;">${curTxt}</td>
+    <td class="num sub">${prevTxt}</td>
+    <td class="num sub">${yoyTxt}</td>
+    <td class="num">${fmtDiff(prevDiff, fmt, isPP)}</td>
+    <td class="num">${deltaInlineHTML(prevPct, isPP)}</td>
+    <td class="num">${fmtDiff(yoyDiff, fmt, isPP)}</td>
+    <td class="num">${deltaInlineHTML(yoyPct, isPP)}</td>
+  </tr>`;
+}
 export function renderMetricCompareRows(tbody, metrics) {
-  tbody.innerHTML = metrics
-    .map((m) => {
-      const { label, cur, prev, yoy, fmt, isPP = false } = m;
-      const curTxt = hasVal(cur) ? fmt(cur) : "—";
-      const prevTxt = hasVal(prev) ? fmt(prev) : "—";
-      const yoyTxt = hasVal(yoy) ? fmt(yoy) : "—";
-      const prevDiff = hasVal(cur) && hasVal(prev) ? cur - prev : null;
-      const yoyDiff = hasVal(cur) && hasVal(yoy) ? cur - yoy : null;
-      const prevPct = prevDiff === null ? null : isPP ? ppDelta(cur, prev) : pctDelta(cur, prev);
-      const yoyPct = yoyDiff === null ? null : isPP ? ppDelta(cur, yoy) : pctDelta(cur, yoy);
-      return `<tr>
-        <td class="name">${label}</td>
-        <td class="num" style="color:var(--cur); font-weight:700;">${curTxt}</td>
-        <td class="num sub">${prevTxt}</td>
-        <td class="num sub">${yoyTxt}</td>
-        <td class="num">${fmtDiff(prevDiff, fmt, isPP)}</td>
-        <td class="num">${deltaInlineHTML(prevPct, isPP)}</td>
-        <td class="num">${fmtDiff(yoyDiff, fmt, isPP)}</td>
-        <td class="num">${deltaInlineHTML(yoyPct, isPP)}</td>
-      </tr>`;
-    })
-    .join("");
+  tbody.innerHTML = metrics.map(metricRowHTML).join("");
 }
 
 // 탭 바: container에 렌더링하고 클릭 이벤트를 바인딩

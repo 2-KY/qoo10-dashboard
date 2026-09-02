@@ -7,12 +7,13 @@
 import {
   fmtYen, fmtNum, fmtPct, pctDelta, ppDelta, deltaChipHTML, deltaInlineHTML,
   aggregateRange, aggregateMonth, aggregateYear, aggregateRows,
-  rowsForDayOffset, daysBetween, buildPromoDayLabels, resolveMainSkus, sumMainSkuSales,
+  rowsForDayOffset, buildPromoDayLabels, resolveMainSkus, sumMainSkuSales,
   isValidPeriod, aggregateRangeOrNull, seriesForOffsetOrNull,
+  rowifyInflowProduct, channelSeriesForOffsetOrNull,
 } from "./utils.js";
 import {
-  kpiCardHTML, triCompareBarHTML, renderTabs, renderPills, renderAccordion,
-  skuBadgeHTML, renderMetricCompareRows,
+  kpiCardHTML, triCompareBarHTML, renderTabs, renderPills,
+  skuBadgeHTML, renderMetricCompareRows, metricRowHTML,
 } from "./components.js";
 
 const $ = (id) => document.getElementById(id);
@@ -570,165 +571,541 @@ export function renderDaily(data, promoId) {
 }
 
 /* ================================================================
-   5. 유입 분석 (숍 전체 / 메인 SKU / 추가 상품 선택 가능)
+   5. 유입 분석 — 실제 데이터 연동
+   data.meta.inflowChannels(E~BC 51개, 원본 컬럼 순서) / data.inflowCatalog
+   (전체 카탈로그 203개 상품, 컬럼형) / data.shopDaily[].channels(숍전체 합산,
+   Code.gs에서 이미 전체 상품 합산 완료)를 사용한다. 전체 PV(BD)/외부유입/
+   내부유입 산식은 Code.gs에서 이미 확정된 값을 그대로 쓰고, 이 화면에서
+   다시 계산하지 않는다.
    ================================================================ */
-// 원본에서 실제로 제공하는 세부 채널은 외부유입의 "URL직접입력"/"기타" 2개뿐이다
-// (내부유입 세부 채널은 원본에 컬럼이 없어 데이터가 없음 — 예전에는 고정 비율로 가짜
-// 수치를 만들어 보여줬으나, 실제 원본에 없는 데이터라 제거함).
-function buildChannelBreakdown(cur) {
-  const etcExternal = Math.max(0, cur.externalInflow - cur.externalUrlDirect - cur.externalEtc);
-  return {
-    internal: [], // 원본에 내부유입 세부 채널 컬럼이 없음 — 아코디언에 항목 없이 합계만 표시
-    external: [
-      { name: "URL 직접입력", val: cur.externalUrlDirect },
-      { name: "기타", val: cur.externalEtc },
-      { name: "기타 외부(미분류)", val: etcExternal },
-    ],
-  };
+
+// "{그룹}_{세부}" 형태만 그룹으로 묶고, 밑줄 없는 이름은 단독 채널로 둔다.
+// data.meta.inflowChannels(원본 E~BC 컬럼 순서 그대로)에 그대로 적용 —
+// 정렬하지 않는다(KY 확정: 원본 순서 고정).
+function parseChannelList_(rawNames) {
+  const items = [];
+  let currentGroup = null;
+  rawNames.forEach((raw) => {
+    const idx = raw.indexOf("_");
+    if (idx === -1) {
+      currentGroup = null;
+      items.push({ type: "single", key: raw, label: raw });
+      return;
+    }
+    const prefix = raw.slice(0, idx);
+    const suffix = raw.slice(idx + 1);
+    if (currentGroup && currentGroup.name === prefix) {
+      currentGroup.children.push({ key: raw, label: suffix });
+    } else {
+      currentGroup = { type: "group", name: prefix, children: [{ key: raw, label: suffix }] };
+      items.push(currentGroup);
+    }
+  });
+  return items;
 }
 
-let inflowState = { promoId: null, target: "shop", addedTargets: {}, flowCat: "totalInflow" };
-
-function inflowTargets(data, promo) {
-  const mainSkus = resolveMainSkus(data, promo.id);
-  const added = inflowState.addedTargets[promo.id] || [];
-  return [
-    { key: "shop", name: "숍 전체", shop: true },
-    ...mainSkus.map((s) => ({ key: s.code, code: s.code, name: s.name, shop: false })),
-    ...added.map((t) => ({ key: t.code, code: t.code, name: t.name, shop: false, added: true })),
-  ];
+const SHOP_ALL_CODE = "SHOP_ALL";
+const SHOP_ALL_LABEL = "숍 전체";
+const PINNED_KEY_ = "qoo10_inflow_pinned_products";
+function loadPinned_() {
+  try { return JSON.parse(localStorage.getItem(PINNED_KEY_) || "[]"); } catch (e) { return []; }
 }
+function savePinned_(list) {
+  try { localStorage.setItem(PINNED_KEY_, JSON.stringify(list)); } catch (e) { /* localStorage 미지원 환경은 조용히 무시 */ }
+}
+
+const TOP10_METRIC_TABS = [
+  { key: "totalInflow", label: "전체 PV" },
+  { key: "internalInflow", label: "내부유입" },
+  { key: "externalInflow", label: "외부유입" },
+];
+const TOP10_DIRECTION_TABS = [
+  { key: "decrease", label: "감소 TOP 10" },
+  { key: "increase", label: "증가 TOP 10" },
+];
+
+// 직전 대비 차이(cur-prev) 기준 정렬 — null(데이터 없음)은 항상 뒤로 보낸다.
+function sortByDiff_(rows, direction) {
+  const diffOf = (r) => (hasVal(r.cur) && hasVal(r.prev) ? r.cur - r.prev : null);
+  return rows.slice().sort((a, b) => {
+    const da = diffOf(a), db = diffOf(b);
+    if (da === null && db === null) return 0;
+    if (da === null) return 1;
+    if (db === null) return -1;
+    return direction === "increase" ? db - da : da - db;
+  });
+}
+function sortMetricRows_(rows, sortKey) {
+  if (sortKey === "name") return rows.slice().sort((a, b) => a.label.localeCompare(b.label));
+  return sortByDiff_(rows, sortKey === "diffAsc" ? "increase" : "decrease");
+}
+
+const inflowState_ = {
+  top10Direction: "decrease",
+  top10Tab: "totalInflow",
+  viewMode: "product", // product | channel
+  periodMode: "cumulative", // cumulative | daily
+  selectedProductCode: null,
+  selectedChannel: null,
+  dayIndex: 0,
+  sessionAddedCodes: [], // 이번 세션에 추가했지만 아직 고정하지 않은 상품코드
+  pinnedCodes: loadPinned_(), // 고정 상품코드(localStorage, 다음에 열어도 유지)
+  channelSearch: "",
+  productSearch: "",
+  productSort: "diffDesc",
+};
 
 export function renderInflow(data, promoId) {
   const promo = data.promotions.find((p) => p.id === promoId);
   if (!promo) return;
-  if (inflowState.promoId !== promoId) {
-    inflowState.promoId = promoId;
-    inflowState.target = "shop";
-    inflowState.flowCat = "totalInflow";
+
+  const CHANNELS = data.meta.inflowChannels || [];
+  const CHANNEL_COUNT = CHANNELS.length;
+  const CHANNEL_STRUCTURE = parseChannelList_(CHANNELS);
+  const catalog = data.inflowCatalog || {};
+  const catalogList = Object.keys(catalog).map((code) => ({ code, name: catalog[code].name || `상품 ${code}` }));
+  const mainSkus = resolveMainSkus(data, promo.id);
+
+  // rowify 캐시 — 이번 renderInflow 호출(=프로모션 선택/전환) 동안만 유지.
+  // 숍전체는 이미 data.shopDaily가 날짜-행 배열이라 변환 없이 그대로 쓴다.
+  const rowsCache = {};
+  function getRows(code) {
+    if (code === SHOP_ALL_CODE) return data.shopDaily;
+    if (!rowsCache[code]) rowsCache[code] = rowifyInflowProduct(catalog[code]);
+    return rowsCache[code];
   }
-  if (!inflowState.addedTargets[promo.id]) inflowState.addedTargets[promo.id] = [];
+
+  function productLabelFor(code) {
+    if (code === SHOP_ALL_CODE) return SHOP_ALL_LABEL;
+    const main = mainSkus.find((s) => s.code === code);
+    if (main) return main.name;
+    if (catalog[code] && catalog[code].name) return catalog[code].name;
+    return `추가상품 ${code}`;
+  }
+
+  if (!inflowState_.selectedProductCode) inflowState_.selectedProductCode = mainSkus[0] ? mainSkus[0].code : SHOP_ALL_CODE;
+  if (!inflowState_.selectedChannel) inflowState_.selectedChannel = CHANNELS[0];
 
   $("inflow-title").textContent = `유입 분석 — ${promo.year}년 ${promo.month}월 ${promo.name}`;
 
-  function drawTargetTabs() {
-    const targets = inflowTargets(data, promo);
-    renderTabs(
-      $("inflow-target-tabs"),
-      targets.map((t) => ({ key: t.key, label: (t.shop ? "숍 전체" : t.name) + (t.added ? " ✕" : "") })),
-      inflowState.target,
-      (key) => { inflowState.target = key; drawBody(); }
-    );
-  }
-
-  function drawBody() {
-    const targets = inflowTargets(data, promo);
-    const t = targets.find((x) => x.key === inflowState.target) || targets[0];
-    const arr = t.shop ? data.shopDaily : data.skuDaily[t.code];
-
-    if (!arr) {
-      $("inflow-flow-top").innerHTML = `<div class="panel" style="grid-column:1/-1;">이 상품코드(${t.code})에 대한 유입 데이터가 없습니다.</div>`;
-      $("inflow-accordion").innerHTML = "";
-      $("flow-daily-table").querySelector("tbody").innerHTML = "";
-      return;
-    }
-
-    const cur = aggregateRange(arr, promo.current.start, promo.current.end);
-    const estTag = t.shop ? "" : ` <span class="badge-sku" style="color:var(--cur); background:var(--cur-bg);">SKU 실측 · 25)/26)SHOP_유입현황 기준</span>`;
-
-    $("inflow-flow-top").innerHTML = `
-      <div class="flow-card total">
-        <div class="fl">전체 PV — ${t.shop ? "숍 전체" : t.name}${estTag}</div>
-        <div class="fv num">${fmtNum(cur.totalInflow)}</div>
-        <div class="fshare">전체 PV = 내부 + 외부</div>
+  // ---- 비교 기간 박스 (실제 프로모션_항목 날짜 그대로 — "프로모션 일별 분석"과 동일) ----
+  const prevValid = isValidPeriod(promo.previous);
+  const yoyValid = isValidPeriod(promo.yoy);
+  $("inflow-periods").innerHTML = `
+    <div class="titles">
+      <div class="eyebrow">비교 기간 (프로모션_항목 기준)</div>
+      <h2>${promo.year}년 ${promo.month}월 · ${promo.name}</h2>
+      <div class="periods">
+        <span class="period"><i class="dotc" style="background:var(--cur)"></i>금번 <b>${promo.current.start} ~ ${promo.current.end}</b></span>
+        <span class="period"><i class="dotc" style="background:var(--prev)"></i>직전${promo.previous.label ? "(" + promo.previous.label + ")" : ""} <b>${prevValid ? `${promo.previous.start} ~ ${promo.previous.end}` : "정의되지 않음"}</b></span>
+        <span class="period"><i class="dotc" style="background:var(--yoy)"></i>전년 <b>${yoyValid ? `${promo.yoy.start} ~ ${promo.yoy.end}` : "정의되지 않음"}</b></span>
       </div>
-      <div class="flow-card">
-        <div class="fl" style="color:var(--cur)">내부 유입</div>
-        <div class="fv num">${fmtNum(cur.internalInflow)}</div>
-        <div class="fshare">전체의 ${fmtPct(cur.internalRatio, 0)}</div>
-        <div class="flow-bar-outer"><div class="flow-bar-in" style="width:${cur.internalRatio || 0}%"></div></div>
-      </div>
-      <div class="flow-card">
-        <div class="fl" style="color:var(--prev)">외부 유입</div>
-        <div class="fv num">${fmtNum(cur.externalInflow)}</div>
-        <div class="fshare">전체의 ${fmtPct(cur.externalRatio, 0)}</div>
-        <div class="flow-bar-outer"><div class="flow-bar-ex" style="width:${cur.externalRatio || 0}%"></div></div>
-      </div>`;
+    </div>`;
 
-    const breakdown = buildChannelBreakdown(cur);
-    renderAccordion($("inflow-accordion"), [
-      { key: "internal", name: "내부 유입", color: "var(--cur)", val: cur.internalInflow, share: Math.round(cur.internalRatio), children: breakdown.internal },
-      { key: "external", name: "외부 유입", color: "var(--prev)", val: cur.externalInflow, share: Math.round(cur.externalRatio), children: breakdown.external },
-    ]);
+  // ---- 1. 유입 전체 현황 KPI — 숍 전체(data.shopDaily) 누계, 실제 데이터 ----
+  // KPI 요약/TOP10은 선택한 프로모션 기간 전체(누계, offset 0) 기준으로 고정한다.
+  // "누계/일별" 전환은 아래 "전체 채널 상세 분석"에만 적용된다(레이아웃 유지).
+  const shopCurTotal = seriesForOffsetOrNull(data.shopDaily, promo.current, 0);
+  const shopPrevTotal = seriesForOffsetOrNull(data.shopDaily, promo.previous, 0);
+  const shopYoyTotal = seriesForOffsetOrNull(data.shopDaily, promo.yoy, 0);
+  const summaryDefs = [
+    { label: "전체 PV", key: "totalInflow" },
+    { label: "내부유입", key: "internalInflow" },
+    { label: "외부유입", key: "externalInflow" },
+  ];
+  $("inflow-summary-kpi").innerHTML = summaryDefs
+    .map((k) => {
+      const cur = shopCurTotal ? shopCurTotal[k.key] : null;
+      const prev = shopPrevTotal ? shopPrevTotal[k.key] : null;
+      const yoy = shopYoyTotal ? shopYoyTotal[k.key] : null;
+      return triCompareBarHTML({
+        label: k.label, cur, prev, yoy, fmt: fmtNum,
+        prevPct: hasVal(cur) && hasVal(prev) ? pctDelta(cur, prev) : null,
+        yoyPct: hasVal(cur) && hasVal(yoy) ? pctDelta(cur, yoy) : null,
+      });
+    })
+    .join("");
 
-    drawFlowDaily(arr);
-  }
+  // ---- 2. 유입 TOP 10 (감소/증가 × 전체PV/내부/외부) — 실제 카탈로그 203개 상품 ----
+  function drawTop10() {
+    renderTabs($("inflow-top10-direction-tabs"), TOP10_DIRECTION_TABS, inflowState_.top10Direction, (key) => {
+      inflowState_.top10Direction = key;
+      drawTop10();
+    });
+    renderTabs($("inflow-top10-tabs"), TOP10_METRIC_TABS, inflowState_.top10Tab, (key) => {
+      inflowState_.top10Tab = key;
+      drawTop10();
+    });
 
-  function drawFlowDaily(arr) {
-    const catField = inflowState.flowCat; // totalInflow | internalInflow | externalInflow
-    const perDay = (rangeStart, rangeEnd) => {
-      const n = daysBetween(rangeStart, rangeEnd);
-      const out = [];
-      for (let i = 0; i < n; i++) out.push(aggregateRows(rowsForDayOffset(arr, rangeStart, i))[catField]);
-      return out;
-    };
-    const curDaily = perDay(promo.current.start, promo.current.end);
-    const prevDaily = perDay(promo.previous.start, promo.previous.end);
-    const yoyDaily = perDay(promo.yoy.start, promo.yoy.end);
-    const dayLabels = buildPromoDayLabels(promo);
-    const maxLen = Math.max(curDaily.length, prevDaily.length, yoyDaily.length);
+    const metricKey = inflowState_.top10Tab;
+    let rows = catalogList.map((p) => {
+      const r = getRows(p.code);
+      const cur = seriesForOffsetOrNull(r, promo.current, 0);
+      const prev = seriesForOffsetOrNull(r, promo.previous, 0);
+      const yoy = seriesForOffsetOrNull(r, promo.yoy, 0);
+      return {
+        name: p.name, code: p.code,
+        cur: cur ? cur[metricKey] : null,
+        prev: prev ? prev[metricKey] : null,
+        yoy: yoy ? yoy[metricKey] : null,
+      };
+    });
+    rows = rows.filter((r) => hasVal(r.cur) && hasVal(r.prev)); // 비교 불가(데이터 없음) 상품은 순위에서 제외
+    rows = sortByDiff_(rows, inflowState_.top10Direction).slice(0, 10);
 
-    const sum = (arr2) => arr2.reduce((a, b) => a + (b || 0), 0);
-    const rows = [{ label: "누계", c: sum(curDaily), p: sum(prevDaily), y: sum(yoyDaily) }];
-    for (let i = 0; i < maxLen; i++) {
-      rows.push({ label: dayLabels[i + 1] || `${i + 1}일차`, c: curDaily[i] ?? null, p: prevDaily[i] ?? null, y: yoyDaily[i] ?? null });
-    }
-
-    $("flow-daily-table").querySelector("tbody").innerHTML = rows
+    $("inflow-top10-table").querySelector("tbody").innerHTML = rows
       .map((r, i) => {
-        const prevDiff = r.c !== null && r.p !== null ? r.c - r.p : null;
-        const yoyDiff = r.c !== null && r.y !== null ? r.c - r.y : null;
-        const prevPct = prevDiff !== null ? pctDelta(r.c, r.p) : null;
-        const yoyPct = yoyDiff !== null ? pctDelta(r.c, r.y) : null;
-        return `<tr>
-          <td class="name">${i === 0 ? `<b>${r.label}</b>` : r.label}</td>
-          <td class="num">${r.c !== null ? fmtNum(r.c) : "—"}</td>
-          <td class="num sub">${r.p !== null ? fmtNum(r.p) : "—"}</td>
-          <td class="num sub">${r.y !== null ? fmtNum(r.y) : "—"}</td>
-          <td class="num">${prevDiff !== null ? (prevDiff >= 0 ? "+" : "") + fmtNum(prevDiff) : "—"}</td>
-          <td class="num">${deltaInlineHTML(prevPct)}</td>
+        const prevDiff = r.cur - r.prev;
+        const yoyDiff = hasVal(r.yoy) ? r.cur - r.yoy : null;
+        return `<tr class="inflow-top10-row" data-code="${r.code}" style="cursor:pointer;">
+          <td class="name">${i + 1}</td>
+          <td class="name">${r.name}</td>
+          <td class="num">${fmtNum(r.cur)}</td>
+          <td class="num sub">${fmtNum(r.prev)}</td>
+          <td class="num sub">${hasVal(r.yoy) ? fmtNum(r.yoy) : "—"}</td>
+          <td class="num">${prevDiff >= 0 ? "+" : ""}${fmtNum(prevDiff)}</td>
+          <td class="num">${deltaInlineHTML(pctDelta(r.cur, r.prev))}</td>
           <td class="num">${yoyDiff !== null ? (yoyDiff >= 0 ? "+" : "") + fmtNum(yoyDiff) : "—"}</td>
-          <td class="num">${deltaInlineHTML(yoyPct)}</td>
+          <td class="num">${yoyDiff !== null ? deltaInlineHTML(pctDelta(r.cur, r.yoy)) : "—"}</td>
         </tr>`;
       })
-      .join("");
+      .join("") || `<tr><td colspan="9" class="num tbd">비교 가능한 데이터가 있는 상품이 없습니다.</td></tr>`;
+
+    $("inflow-top10-table").querySelectorAll(".inflow-top10-row").forEach((tr) => {
+      tr.addEventListener("click", () => {
+        inflowState_.viewMode = "product";
+        inflowState_.selectedProductCode = tr.dataset.code;
+        drawViewModeTabs();
+        drawPicker();
+        drawDetailArea();
+        $("inflow-picker-wrap").scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
   }
 
-  renderTabs(
-    $("flow-tabs"),
-    [
-      { key: "totalInflow", label: "전체 PV" },
-      { key: "internalInflow", label: "내부유입" },
-      { key: "externalInflow", label: "외부유입" },
-    ],
-    inflowState.flowCat,
-    (key) => { inflowState.flowCat = key; drawBody(); }
-  );
+  // ---- 3. 전체 채널 상세 분석: 보기 전환 / 기간 단위 / 경과일 ----
+  function drawViewModeTabs() {
+    renderTabs(
+      $("inflow-viewmode-tabs"),
+      [{ key: "product", label: "상품 기준" }, { key: "channel", label: "채널 기준" }],
+      inflowState_.viewMode,
+      (key) => { inflowState_.viewMode = key; drawPicker(); drawDetailArea(); }
+    );
+  }
+  function drawPeriodModeTabs() {
+    renderTabs(
+      $("inflow-periodmode-tabs"),
+      [{ key: "cumulative", label: "누계" }, { key: "daily", label: "일별" }],
+      inflowState_.periodMode,
+      (key) => { inflowState_.periodMode = key; drawDayPills(); drawDetailArea(); }
+    );
+  }
+  function currentOffset() {
+    return inflowState_.periodMode === "daily" ? inflowState_.dayIndex + 1 : 0;
+  }
+  function drawDayPills() {
+    const labels = buildPromoDayLabels(promo); // ["누계","0.5일차"/"1일차",...] — 0.5일차(메가와리) 포함
+    const dayOnly = labels.slice(1);
+    const wrap = $("inflow-day-pills");
+    if (inflowState_.periodMode !== "daily") {
+      wrap.innerHTML = `<span class="hint" style="margin:0;">"일별" 선택 시 경과일을 고를 수 있습니다 (예: ${dayOnly.slice(0, 3).join(", ")}...)</span>`;
+      return;
+    }
+    renderPills(wrap, dayOnly, inflowState_.dayIndex, (i) => { inflowState_.dayIndex = i; drawDetailArea(); });
+  }
 
-  $("inflow-add-btn").onclick = () => {
-    const input = $("inflow-add-input");
-    const code = input.value.trim();
-    if (!code) return;
-    const list = inflowState.addedTargets[promo.id];
-    if (!list.find((t) => t.code === code)) list.push({ name: "추가상품", code });
-    inflowState.target = code;
-    input.value = "";
-    drawTargetTabs();
-    drawBody();
-  };
+  // ---- 상품 기준 / 채널 기준 선택 UI ----
+  function drawPicker() {
+    const wrap = $("inflow-picker-wrap");
+    if (inflowState_.viewMode === "product") {
+      const pinned = inflowState_.pinnedCodes;
+      const sessionAdded = inflowState_.sessionAddedCodes.filter((c) => !pinned.includes(c));
 
-  drawTargetTabs();
-  drawBody();
+      wrap.innerHTML = `
+        <div class="section-title" style="margin-top:0;">숍 전체 <span class="hint" style="display:inline;margin:0;">(선택 기간 내 카탈로그 전체 ${catalogList.length}개 상품의 채널별 PV 합계)</span></div>
+        <div class="tabbar" id="inflow-shopall-tabs"></div>
+
+        <div class="section-title">메인 SKU</div>
+        <div class="tabbar" id="inflow-main-tabs"></div>
+
+        <div class="section-title">고정 상품 <span class="hint" style="display:inline;margin:0;">(📌로 고정한 상품 — 다음에 다시 열어도 이 브라우저에서는 유지됩니다)</span></div>
+        <div class="tabbar" id="inflow-pinned-tabs">${pinned.length === 0 ? '<span class="hint" style="margin:0;">고정된 상품이 없습니다</span>' : ""}</div>
+
+        ${sessionAdded.length > 0 ? `
+        <div class="section-title">신규 상품 <span class="hint" style="display:inline;margin:0;">(방금 추가 — 📌를 눌러 고정하지 않으면 새로고침 시 사라집니다)</span></div>
+        <div class="tabbar" id="inflow-session-tabs"></div>` : ""}
+
+        <div class="section-title">상품코드로 추가</div>
+        <div class="add-sku" style="margin-top:0;">
+          <input type="text" id="inflow-add-code-input" placeholder="상품코드 10자리 입력 (예: 1043733776)" maxlength="10" inputmode="numeric">
+          <button class="btn" id="inflow-add-code-btn">+ 상품 추가</button>
+          <span class="hint" id="inflow-add-code-hint" style="margin:0;"></span>
+        </div>
+
+        <div class="hint" id="inflow-selected-hint" style="margin-top:10px;"></div>`;
+
+      renderTabs(
+        $("inflow-shopall-tabs"),
+        [{ key: SHOP_ALL_CODE, label: SHOP_ALL_LABEL }],
+        inflowState_.selectedProductCode,
+        (key) => { inflowState_.selectedProductCode = key; drawPicker(); drawDetailArea(); }
+      );
+      renderTabs(
+        $("inflow-main-tabs"),
+        mainSkus.map((s) => ({ key: s.code, label: s.name })),
+        inflowState_.selectedProductCode,
+        (key) => { inflowState_.selectedProductCode = key; drawPicker(); drawDetailArea(); }
+      );
+
+      const bindProductPillGroup = (containerEl, codes, pinnedGroup) => {
+        containerEl.innerHTML = codes
+          .map((code) => `
+            <span class="tab${inflowState_.selectedProductCode === code ? " active" : ""}" data-code="${code}" style="display:inline-flex; align-items:center; gap:4px;">
+              <span data-role="select">${productLabelFor(code)}${code.match(/^\d{10}$/) ? " " + code : ""}</span>
+              <button class="pin-btn${pinnedGroup ? " pinned" : ""}" data-action="${pinnedGroup ? "unpin" : "pin"}" data-code="${code}" title="${pinnedGroup ? "고정 해제" : "고정"}">📌</button>
+              <button class="del-btn" data-action="delete" data-code="${code}" title="삭제">×</button>
+            </span>`)
+          .join("");
+        containerEl.querySelectorAll("[data-role='select']").forEach((el) => {
+          el.addEventListener("click", () => {
+            inflowState_.selectedProductCode = el.parentElement.dataset.code;
+            drawPicker(); drawDetailArea();
+          });
+        });
+        containerEl.querySelectorAll("[data-action='pin']").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const code = btn.dataset.code;
+            if (!inflowState_.pinnedCodes.includes(code)) inflowState_.pinnedCodes.push(code);
+            savePinned_(inflowState_.pinnedCodes);
+            drawPicker(); drawDetailArea();
+          });
+        });
+        containerEl.querySelectorAll("[data-action='unpin']").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const code = btn.dataset.code;
+            inflowState_.pinnedCodes = inflowState_.pinnedCodes.filter((c) => c !== code);
+            savePinned_(inflowState_.pinnedCodes);
+            if (!inflowState_.sessionAddedCodes.includes(code)) inflowState_.sessionAddedCodes.push(code);
+            drawPicker(); drawDetailArea();
+          });
+        });
+        containerEl.querySelectorAll("[data-action='delete']").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const code = btn.dataset.code;
+            inflowState_.pinnedCodes = inflowState_.pinnedCodes.filter((c) => c !== code);
+            savePinned_(inflowState_.pinnedCodes);
+            inflowState_.sessionAddedCodes = inflowState_.sessionAddedCodes.filter((c) => c !== code);
+            if (inflowState_.selectedProductCode === code) inflowState_.selectedProductCode = mainSkus[0] ? mainSkus[0].code : SHOP_ALL_CODE;
+            drawPicker(); drawDetailArea();
+          });
+        });
+      };
+
+      bindProductPillGroup($("inflow-pinned-tabs"), pinned, true);
+      if (sessionAdded.length > 0) bindProductPillGroup($("inflow-session-tabs"), sessionAdded, false);
+
+      $("inflow-add-code-btn").addEventListener("click", () => {
+        const input = $("inflow-add-code-input");
+        const code = input.value.trim();
+        const hintEl = $("inflow-add-code-hint");
+        if (!/^\d{10}$/.test(code)) {
+          hintEl.textContent = "상품코드는 숫자 10자리여야 합니다.";
+          hintEl.style.color = "var(--neg)";
+          return;
+        }
+        if (mainSkus.some((s) => s.code === code) || inflowState_.pinnedCodes.includes(code) || inflowState_.sessionAddedCodes.includes(code)) {
+          hintEl.textContent = "이미 목록에 있는 상품입니다.";
+          hintEl.style.color = "var(--text-faint)";
+        } else if (!catalog[code]) {
+          hintEl.textContent = "이 상품코드는 현재 유입현황 시트에 데이터가 없습니다(추가는 되지만 값은 \"—\"로 표시됩니다).";
+          hintEl.style.color = "var(--prev)";
+          inflowState_.sessionAddedCodes.push(code);
+        } else {
+          inflowState_.sessionAddedCodes.push(code);
+          hintEl.textContent = "";
+        }
+        inflowState_.selectedProductCode = code;
+        input.value = "";
+        drawPicker();
+        drawDetailArea();
+      });
+
+      $("inflow-selected-hint").textContent = inflowState_.selectedProductCode
+        ? `현재 선택된 상품: ${productLabelFor(inflowState_.selectedProductCode)}` +
+          (inflowState_.selectedProductCode === SHOP_ALL_CODE ? "" : ` (${inflowState_.selectedProductCode})`)
+        : "";
+    } else {
+      const blocks = [];
+      let singleBuffer = [];
+      const flushSingles = () => {
+        if (singleBuffer.length === 0) return;
+        blocks.push(`<div class="channel-group"><div class="channel-pills">${singleBuffer.join("")}</div></div>`);
+        singleBuffer = [];
+      };
+      CHANNEL_STRUCTURE.forEach((item) => {
+        if (item.type === "single") {
+          singleBuffer.push(`<span class="channel-pill${item.key === inflowState_.selectedChannel ? " active" : ""}" data-channel="${item.key}">${item.label}</span>`);
+        } else {
+          flushSingles();
+          blocks.push(`
+            <div class="channel-group">
+              <div class="channel-group-label">${item.name}</div>
+              <div class="channel-pills">
+                ${item.children.map((c) => `<span class="channel-pill${c.key === inflowState_.selectedChannel ? " active" : ""}" data-channel="${c.key}">${c.label}</span>`).join("")}
+              </div>
+            </div>`);
+        }
+      });
+      flushSingles();
+
+      wrap.innerHTML = `
+        <div class="channel-picker">
+          <input type="text" class="channel-search" id="inflow-channel-search" placeholder="채널 검색 (예: 검색, Google...)">
+          ${blocks.join("")}
+        </div>`;
+      wrap.querySelectorAll(".channel-pill").forEach((el) => {
+        el.addEventListener("click", () => {
+          inflowState_.selectedChannel = el.dataset.channel;
+          wrap.querySelectorAll(".channel-pill").forEach((x) => x.classList.remove("active"));
+          el.classList.add("active");
+          drawDetailArea();
+        });
+      });
+      const searchInput = $("inflow-channel-search");
+      searchInput.addEventListener("input", () => {
+        const q = searchInput.value.trim().toLowerCase();
+        wrap.querySelectorAll(".channel-pill").forEach((el) => {
+          el.classList.toggle("hidden", q !== "" && !el.textContent.toLowerCase().includes(q));
+        });
+      });
+    }
+  }
+
+  // ---- 상세 영역: 상품 기준(채널 51개 전체, 그룹 표시) / 채널 기준(상품 표) ----
+  function drawDetailArea() {
+    const wrap = $("inflow-detail-wrap");
+    const offset = currentOffset();
+    if (inflowState_.viewMode === "product") {
+      const productLabel = productLabelFor(inflowState_.selectedProductCode);
+      wrap.innerHTML = `
+        <div class="panel" style="display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom:14px;">
+          <input type="text" class="channel-search" id="inflow-detail-search" placeholder="채널 검색..." value="${inflowState_.channelSearch}" style="margin:0;">
+          <span class="hint" style="margin:0;">"${productLabel}"의 전체 채널 ${CHANNEL_COUNT}개 · 원본 컬럼(E~BC) 순서 그대로 표시. 전체 PV(BD 합계)는 위 KPI의 "전체 PV"를 참고하세요 — 아래 51개 채널의 단순 합과는 다를 수 있습니다(상위 채널의 "_전체" 항목이 하위 세부채널을 포함하는 소계이기 때문).</span>
+        </div>
+        <div class="panel table-wrap" style="padding:8px 12px;">
+          <table>
+            <thead><tr><th>유입채널</th><th>금번</th><th>직전</th><th>전년</th><th>직전차</th><th>직전비</th><th>전년차</th><th>전년비</th></tr></thead>
+            <tbody id="inflow-channel-tbody"></tbody>
+          </table>
+        </div>`;
+
+      const rows = getRows(inflowState_.selectedProductCode);
+      const curArr = channelSeriesForOffsetOrNull(rows, promo.current, offset, CHANNEL_COUNT);
+      const prevArr = channelSeriesForOffsetOrNull(rows, promo.previous, offset, CHANNEL_COUNT);
+      const yoyArr = channelSeriesForOffsetOrNull(rows, promo.yoy, offset, CHANNEL_COUNT);
+      const valueFor = (arr, idx) => (arr ? arr[idx] : null);
+
+      const renderChannelRows = () => {
+        const q = inflowState_.channelSearch.trim().toLowerCase();
+        const rowsHtml = [];
+        CHANNEL_STRUCTURE.forEach((item) => {
+          if (item.type === "single") {
+            if (q && !item.label.toLowerCase().includes(q)) return;
+            const idx = CHANNELS.indexOf(item.key);
+            rowsHtml.push(metricRowHTML({ label: item.label, cur: valueFor(curArr, idx), prev: valueFor(prevArr, idx), yoy: valueFor(yoyArr, idx), fmt: fmtNum }));
+          } else {
+            const groupNameMatches = !q || item.name.toLowerCase().includes(q);
+            const children = groupNameMatches ? item.children : item.children.filter((c) => c.label.toLowerCase().includes(q));
+            if (children.length === 0) return;
+            rowsHtml.push(`<tr class="ch-group-row"><td colspan="8" class="name" style="background:#FAFAFC; font-weight:700;">${item.name}</td></tr>`);
+            children.forEach((c) => {
+              const idx = CHANNELS.indexOf(c.key);
+              rowsHtml.push(metricRowHTML({ label: c.label, cur: valueFor(curArr, idx), prev: valueFor(prevArr, idx), yoy: valueFor(yoyArr, idx), fmt: fmtNum, indent: true }));
+            });
+          }
+        });
+        $("inflow-channel-tbody").innerHTML = rowsHtml.join("") || `<tr><td colspan="8" class="num tbd">검색 결과가 없습니다.</td></tr>`;
+      };
+      renderChannelRows();
+
+      $("inflow-detail-search").addEventListener("input", (e) => {
+        inflowState_.channelSearch = e.target.value;
+        renderChannelRows();
+      });
+    } else {
+      wrap.innerHTML = `
+        <div class="panel" style="display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom:14px;">
+          <input type="text" class="channel-search" id="inflow-product-search" placeholder="상품 검색..." value="${inflowState_.productSearch}" style="margin:0;">
+          <select class="dd-select" id="inflow-product-sort">
+            <option value="diffDesc">직전 대비 감소 큰 순</option>
+            <option value="diffAsc">직전 대비 증가 큰 순</option>
+            <option value="name">상품명 순</option>
+          </select>
+          <span class="hint" style="margin:0;">"${channelLabelFor_(inflowState_.selectedChannel, CHANNEL_STRUCTURE)}" 채널의 숍전체 + 전체 상품 ${catalogList.length}개</span>
+        </div>
+        <div class="panel table-wrap" style="padding:8px 12px;">
+          <table id="inflow-detail-table"><thead id="inflow-detail-thead"></thead><tbody></tbody></table>
+        </div>`;
+      $("inflow-product-sort").value = inflowState_.productSort;
+
+      const channelIdx = CHANNELS.indexOf(inflowState_.selectedChannel);
+
+      const valueForProduct = (code) => {
+        const r = getRows(code);
+        const curArr = channelSeriesForOffsetOrNull(r, promo.current, offset, CHANNEL_COUNT);
+        const prevArr = channelSeriesForOffsetOrNull(r, promo.previous, offset, CHANNEL_COUNT);
+        const yoyArr = channelSeriesForOffsetOrNull(r, promo.yoy, offset, CHANNEL_COUNT);
+        return {
+          cur: curArr ? curArr[channelIdx] : null,
+          prev: prevArr ? prevArr[channelIdx] : null,
+          yoy: yoyArr ? yoyArr[channelIdx] : null,
+        };
+      };
+
+      const renderProductTable = () => {
+        const thead = $("inflow-detail-thead");
+        const tbody = $("inflow-detail-table").querySelector("tbody");
+        thead.innerHTML = `<tr><th>상품</th><th>금번</th><th>직전</th><th>전년</th><th>직전차</th><th>직전비</th><th>전년차</th><th>전년비</th></tr>`;
+        const q = inflowState_.productSearch.trim().toLowerCase();
+
+        let rows = catalogList
+          .filter((p) => !q || p.name.toLowerCase().includes(q) || p.code.includes(q))
+          .map((p) => {
+            const v = valueForProduct(p.code);
+            return { label: p.name, cur: v.cur, prev: v.prev, yoy: v.yoy, fmt: fmtNum };
+          });
+        rows = sortMetricRows_(rows, inflowState_.productSort);
+
+        if (!q || SHOP_ALL_LABEL.toLowerCase().includes(q)) {
+          const v = valueForProduct(SHOP_ALL_CODE);
+          rows.unshift({ label: SHOP_ALL_LABEL, cur: v.cur, prev: v.prev, yoy: v.yoy, fmt: fmtNum });
+        }
+        renderMetricCompareRows(tbody, rows);
+      };
+      renderProductTable();
+
+      $("inflow-product-search").addEventListener("input", (e) => { inflowState_.productSearch = e.target.value; renderProductTable(); });
+      $("inflow-product-sort").addEventListener("change", (e) => { inflowState_.productSort = e.target.value; renderProductTable(); });
+    }
+  }
+
+  function channelLabelFor_(key, structure) {
+    for (const item of structure) {
+      if (item.type === "single" && item.key === key) return item.label;
+      if (item.type === "group") {
+        const child = item.children.find((c) => c.key === key);
+        if (child) return `${item.name} > ${child.label}`;
+      }
+    }
+    return key;
+  }
+
+  drawTop10();
+  drawViewModeTabs();
+  drawPeriodModeTabs();
+  drawDayPills();
+  drawPicker();
+  drawDetailArea();
 }
 
 /* ================================================================

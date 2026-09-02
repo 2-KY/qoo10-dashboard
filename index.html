@@ -156,34 +156,52 @@
       </div>
 
       <!-- ========================================================= -->
-      <!-- 5. INFLOW -->
+      <!-- 5. INFLOW (UI 목업 — 실제 데이터 미연동, 샘플값으로 레이아웃만 확인) -->
       <!-- ========================================================= -->
       <div class="screen" data-screen="inflow">
         <div class="section-title" id="inflow-title">유입 분석</div>
-        <div class="hint">숍 전체 또는 메인 SKU를 선택해 PV 상세를 확인합니다 (25)/26)SHOP_유입현황 시트의 상품코드 기준 SKU별 실측 집계, 연도는 프로모션 기간에 맞춰 자동 선택). 기본은 3단 요약만 표시하고, 클릭 시 세부 채널이 펼쳐집니다.</div>
-
-        <div class="tabbar" id="inflow-target-tabs"></div>
-        <div class="add-sku" style="margin:-4px 0 18px;">
-          <input type="text" id="inflow-add-input" placeholder="상품번호 입력">
-          <button class="btn" id="inflow-add-btn">+ 추가하여 보기</button>
+        <div class="warn-banner">
+          <span>⚠️</span>
+          <span>이 화면은 <b>UI 레이아웃 목업</b>입니다. 아래 모든 수치는 실제 유입 데이터가 아니라 화면 배치 확인용 샘플값입니다. 실제 데이터 연동은 별도 단계에서 진행합니다.</span>
         </div>
 
-        <div class="flow-top" id="inflow-flow-top"></div>
+        <div class="promo-hero" id="inflow-periods"></div>
 
-        <div class="section-title">카테고리별 드릴다운 <span class="hint" style="display:inline; margin:0;">(클릭하여 펼치기)</span></div>
-        <div class="accordion" id="inflow-accordion"></div>
+        <div class="section-title">유입 전체 현황 <span class="badge-sku" style="color:#92660A; background:#FFF3CD;">샘플</span></div>
+        <div class="legend"><span><i class="c-cur"></i>금번</span><span><i class="c-prev"></i>직전</span><span><i class="c-yoy"></i>전년</span></div>
+        <div class="kpi-grid cols4" id="inflow-summary-kpi"></div>
 
-        <div class="section-title">일별 유입 추이 — 금번 · 직전 · 전년 비교</div>
-        <div class="hint">탭을 선택하면 해당 유입 구분(전체/내부/외부)의 일자별 금번·직전·전년 수치와 증감을 비교합니다</div>
-        <div class="tabbar" id="flow-tabs"></div>
+        <div class="section-title">유입 TOP 10 <span class="hint" style="display:inline; margin:0;">(정렬 기준: 절대 PV 증감량 — 증감률이 아님)</span></div>
+        <div class="tabbar" id="inflow-top10-direction-tabs"></div>
+        <div class="tabbar" id="inflow-top10-tabs"></div>
         <div class="panel table-wrap" style="padding:8px 12px;">
-          <table id="flow-daily-table">
+          <table id="inflow-top10-table">
             <thead><tr>
-              <th>구분</th><th>금번</th><th>직전</th><th>전년</th><th>직전차</th><th>직전비</th><th>전년차</th><th>전년비</th>
+              <th>순위</th><th>상품</th><th>금번</th><th>직전</th><th>전년</th><th>직전차</th><th>직전비</th><th>전년차</th><th>전년비</th>
             </tr></thead>
             <tbody></tbody>
           </table>
         </div>
+        <div class="hint" id="inflow-top10-hint" style="margin:-10px 0 0;">행을 클릭하면 아래 "전체 채널 상세 분석"에서 해당 상품이 자동으로 선택됩니다. TOP10 대상은 메인 SKU뿐 아니라 유입현황 시트에 등장하는 전체 상품입니다.</div>
+
+        <div class="section-title">전체 채널 상세 분석</div>
+        <div class="hint">원본 유입채널(E~BC)을 하나도 버리지 않고 전부 탐색할 수 있는 영역입니다. "상품 기준"은 상품 하나를 골라 그 상품의 전체 채널을, "채널 기준"은 채널 하나를 골라 그 채널의 전체 상품을 보여줍니다.</div>
+        <div class="tabbar" id="inflow-viewmode-tabs"></div>
+
+        <div class="panel" style="margin-bottom:14px; display:flex; gap:18px; flex-wrap:wrap; align-items:center;">
+          <div>
+            <div class="kpi-label" style="margin-bottom:8px;">기간 단위</div>
+            <div class="tabbar" id="inflow-periodmode-tabs" style="margin:0;"></div>
+          </div>
+          <div style="flex:1; min-width:220px;">
+            <div class="kpi-label" style="margin-bottom:8px;">경과일 선택 <span class="hint" style="display:inline; margin:0;">("일별" 선택 시 활성화, 이번 단계는 배치만)</span></div>
+            <div class="day-pills" id="inflow-day-pills" style="margin:0;"></div>
+          </div>
+        </div>
+
+        <div id="inflow-picker-wrap"></div>
+
+        <div id="inflow-detail-wrap" style="margin-top:14px;"></div>
       </div>
 
       <!-- ========================================================= -->

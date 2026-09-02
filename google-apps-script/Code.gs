@@ -58,8 +58,16 @@ function buildDashboardData_(ss) {
   const promotions = readPromotions_(ss, mainSkus); // 프로모션_항목 A~J열 (mainSkus는 P2:P10 마스터 전체 적용)
   const monthlyTargets = readMonthlyTargets_(ss); // 프로모션_항목 L~N열
 
-  const shopDaily = buildShopDaily_(ss);
-  const skuDaily = buildSkuDaily_(ss, mainSkus);
+  // ⚠️ 2026-09-02: 25)/26)SHOP_유입현황을 여기서 딱 한 번씩만 읽어(각 최대
+  // 3만 행대) skuDaily(메인 9SKU)와 inflowCatalog(전체 카탈로그) 양쪽에
+  // 나눠준다. 예전처럼 두 곳에서 각자 다시 읽으면 큰 시트를 두 번씩 읽게 된다.
+  const inflow26 = readInflowByProduct_(ss, "26)SHOP_유입현황");
+  const inflow25 = readInflowByProduct_(ss, "25)SHOP_유입현황");
+  const inflowCatalog = buildInflowCatalog_(inflow26, inflow25);
+  const shopChannelsByDate = sumCatalogChannelsByDate_(inflowCatalog);
+
+  const shopDaily = buildShopDaily_(ss, shopChannelsByDate);
+  const skuDaily = buildSkuDaily_(ss, mainSkus, inflow26.byCodeDate, inflow25.byCodeDate);
   const coupons = readCoupons_(ss);
 
   logDebugSummaries_(shopDaily, skuDaily, promotions, mainSkus); // 진단 전용 — data.json 내용에는 영향 없음
@@ -67,11 +75,12 @@ function buildDashboardData_(ss) {
   return {
     generatedAt: new Date().toISOString(),
     isSampleData: false,
-    meta: { mainSkus: mainSkus },
+    meta: { mainSkus: mainSkus, inflowChannels: INFLOW_CHANNELS_ },
     promotions: promotions,
     monthlyTargets: monthlyTargets,
     shopDaily: shopDaily,
     skuDaily: skuDaily,
+    inflowCatalog: inflowCatalog,
     coupons: coupons,
   };
 }
@@ -257,11 +266,18 @@ function readMonthlyTargets_(ss) {
 // 2-4. 숍 전체 일별 데이터
 // SHOP_매출 + 26)/25)SHOP_유입현황 을 날짜 기준으로 결합
 // --------------------------------------------------------------------
-function buildShopDaily_(ss) {
+// ⚠️ 2026-09-02: channelsByDate(선택) — date -> 52개 채널 합계 배열. 전달되면
+// 각 행에 channels 필드로 추가한다. 이 값은 buildDashboardData_가
+// buildInflowCatalog_에서 이미 만든 "전체 상품 채널별 합계"를 그대로 넘겨주는
+// 것으로, readInflowSheet_를 다시 읽어 만들지 않는다(같은 시트를 또 읽지
+// 않기 위함). 기존 totalInflow/internalInflow/externalInflow 등은 지금까지와
+// 완전히 동일하게 readInflowSheet_ 기준으로 계산 — 변경 없음.
+function buildShopDaily_(ss, channelsByDate) {
   const salesRows = readShopSalesSheet_(ss, "SHOP_매출"); // date -> {sales, orders, qty, uv, newCustomers, existingCustomers}
   const inflow26 = readInflowSheet_(ss, "26)SHOP_유입현황");
   const inflow25 = readInflowSheet_(ss, "25)SHOP_유입현황");
   const inflowByDate = Object.assign({}, inflow25, inflow26);
+  const emptyChannels = new Array(INFLOW_CHANNELS_.length).fill(0);
 
   const out = [];
   Object.keys(salesRows)
@@ -280,6 +296,7 @@ function buildShopDaily_(ss) {
         existingRatio: totalCustomers ? (s.existingCustomers / totalCustomers) * 100 : null,
         totalInflow: inf.totalInflow, internalInflow: inf.internalInflow, externalInflow: inf.externalInflow,
         externalUrlDirect: inf.externalUrlDirect || 0, externalEtc: inf.externalEtc || 0,
+        channels: (channelsByDate && channelsByDate[date]) || emptyChannels,
       });
     });
   return out;
@@ -386,6 +403,29 @@ function resolveShiftedDataCol_(header, labelCol, maxCol) {
   }
   return labelCol;
 }
+
+// --------------------------------------------------------------------
+// 2026-09-02 확장: E~BC 전체 유입채널 52개 (KY가 diagnoseInflowExpansion_
+// 실행 결과로 확인한 실제 헤더명, 원본 컬럼 순서 그대로). data.json의
+// meta.inflowChannels로도 그대로 노출되어, 프론트가 이 배열의 인덱스로
+// 각 상품/날짜의 channels[] 배열을 해석한다. BD("합계(총페이지뷰)")는
+// 여기 포함하지 않는다 — 기존 전체 PV 산식(cTotal)이 이미 별도로 읽는다.
+// --------------------------------------------------------------------
+const INFLOW_CHANNELS_ = [
+  "홈(메인페이지)_전체", "홈(메인페이지)_메가할인", "홈(메인페이지)_메가포", "홈(메인페이지)_나의관심상품",
+  "홈(메인페이지)_주목 브랜드", "홈(메인페이지)_랭킹", "홈(메인페이지)_공식 코스메 랭킹", "홈(메인페이지)_코스메셀렉트",
+  "홈(메인페이지)_타임세일", "홈(메인페이지)_데일리딜", "홈(메인페이지)_공동구매", "홈(메인페이지)_호리다시모노",
+  "홈(메인페이지)_기타",
+  "검색결과_전체", "검색결과_키워드플러스", "검색결과_파워랭크업", "검색결과_스마트세일즈", "검색결과_타임세일", "검색결과_일반",
+  "베스트셀러", "뷰티", "이너뷰티",
+  "프로모션페이지_전체", "프로모션페이지_오늘의메가할인", "프로모션페이지_오늘의메가포", "프로모션페이지_타임세일",
+  "프로모션페이지_데일리딜", "프로모션페이지_공동구매", "프로모션페이지_호리다시모노",
+  "위시리스트", "최근본상품", "장바구니", "셀러샵", "기획전", "카테고리페이지", "상품상세페이지",
+  "상품카탈로그", "마이페이지", "Live Shopping",
+  "외부유입_전체", "외부유입_구글", "외부유입_페이스북", "외부유입_X(트위터)", "외부유입_Instagram",
+  "외부유입_야후", "외부유입_카카쿠", "외부유입_라인", "외부유입_이메일", "외부유입_기타",
+  "URL직접입력", "기타",
+];
 
 // --------------------------------------------------------------------
 // PV(유입) 공통 산식 — 숍 전체(readInflowSheet_)와 SKU별(readInflowByProduct_)이
@@ -496,13 +536,16 @@ function readInflowSheet_(ss, sheetName) {
 // 2-5. SKU별 일별 데이터
 // 26)/25)SHOP_거래현황(매출/수량) + 상품별 고객 Raw(신규/기존) +
 // 26)/25)SHOP_유입현황의 "상품번호" 컬럼(유입) 을 상품코드 기준으로 결합
+// ⚠️ 2026-09-02: inflowByProduct26/25는 readInflowByProduct_가 반환하는
+// {byCodeDate, namesByCode} 그대로가 아니라 .byCodeDate만 전달받는다 —
+// 유입 시트(수만 행)를 이 함수와 buildInflowCatalog_가 각각 다시 읽으면
+// 큰 시트를 두 번 읽게 되어(실행 시간 낭비), buildDashboardData_에서 딱
+// 한 번만 읽어 양쪽에 나눠준다. 이 함수의 나머지 로직/출력값은 전혀 변경 없음.
 // --------------------------------------------------------------------
-function buildSkuDaily_(ss, mainSkus) {
+function buildSkuDaily_(ss, mainSkus, inflowByProduct26, inflowByProduct25) {
   const trade26 = readTradeSheet_(ss, "26)SHOP_거래현황");
   const trade25 = readTradeSheet_(ss, "25)SHOP_거래현황");
   const customerByProduct = readCustomerByProductSheets_(ss, mainSkus);
-  const inflowByProduct26 = readInflowByProduct_(ss, "26)SHOP_유입현황");
-  const inflowByProduct25 = readInflowByProduct_(ss, "25)SHOP_유입현황");
 
   const tradeCodes = uniq_(Object.keys(trade25).concat(Object.keys(trade26)));
   const mainCodes = mainSkus.map((s) => s.code);
@@ -804,9 +847,19 @@ function readCustomerByProductSheets_(ss, mainSkus) {
 // ⚠️ 실측 확인됨(KY): "합계(총페이지뷰)" 라벨 컬럼(55번)의 값(1,312 for
 // 1043733766 2026-07-01~09)은 실제 PV(85,472)와 다르고, 그 다음 컬럼(56번, 헤더
 // 빈 문자열)이 실제 값과 정확히 일치했다. resolveShiftedDataCol_로 동일하게 보정.
+//
+// ⚠️ 2026-09-02 확장(KY 확인 완료 — diagnoseInflowExpansion_ 실행 결과 기준):
+// E~BC 52개 채널(INFLOW_CHANNELS_) 전체를 이 함수에서 함께 읽어 각 (상품,날짜)
+// 행에 channels 배열(52개, INFLOW_CHANNELS_와 같은 순서)로 추가한다. 기존
+// totalInflow/internalInflow/externalInflow/externalUrlDirect/externalEtc
+// 계산(computeInflowRow_, cTotal/cExt1/cExt2/cExt3)은 절대 변경하지 않는다 —
+// channels는 완전히 별도로 덧붙이는 필드다. "상품명" 컬럼도 함께 읽어
+// namesByCode로 반환한다(전체 카탈로그 상품은 프로모션_항목에 이름이 없어
+// 이 시트에서 직접 가져와야 함). 반환 타입이 out(객체)에서
+// {byCodeDate, namesByCode}로 바뀌므로 호출부(buildSkuDaily_)도 함께 수정했다.
 function readInflowByProduct_(ss, sheetName) {
   const sheet = ss.getSheetByName(sheetName);
-  if (!sheet) return {};
+  if (!sheet) return { byCodeDate: {}, namesByCode: {} };
   const values = sheet.getDataRange().getValues();
   const header = values[0];
   const idx = (name) => requireCol_(header, name, sheetName);
@@ -820,58 +873,25 @@ function readInflowByProduct_(ss, sheetName) {
   const cExt1 = resolveShiftedDataCol_(header, cExt1Label);
   const cExt2 = resolveShiftedDataCol_(header, cExt2Label);
   const cExt3 = resolveShiftedDataCol_(header, cExt3Label);
+  const cName = findColTrim_(header, "상품명"); // 없으면 -1 — 전체 카탈로그 상품 이름 표시용(필수 아님)
   Logger.log(
-    '[readInflowByProduct_] "' + sheetName + '" 컬럼 위치 — 날짜:' + cDate + ' 상품번호:' + cCode +
+    '[readInflowByProduct_] "' + sheetName + '" 컬럼 위치 — 날짜:' + cDate + ' 상품번호:' + cCode + ' 상품명:' + cName +
     ' 합계(라벨' + cTotalLabel + '→실값' + cTotal + ')' +
     ' 외부전체(라벨' + cExt1Label + '→실값' + cExt1 + ')' +
     ' URL직접입력(라벨' + cExt2Label + '→실값' + cExt2 + ')' +
     ' 기타(라벨' + cExt3Label + '→실값' + cExt3 + ')'
   );
 
-  // 검증(KY 요청, 계산식은 변경하지 않음 — 원본 컬럼 매핑 자체만 확인):
-  // "외부유입_전체"를 포함해 세부 채널 후보 컬럼들의 실제 헤더 위치와, SKU=1043733766
-  // 2026-07-01~09 구간의 원본값 합계를 전부 로그로 남긴다. 라벨 컬럼과 resolveShiftedDataCol_
-  // 보정 후 컬럼을 둘 다 합산해서 비교할 수 있게 한다(둘 중 어느 쪽이 맞는지는 로그로 판단).
-  if (sheetName.indexOf("26)") === 0) {
-    const CANDIDATE_NAMES = [
-      "외부유입_전체", "외부유입_구글", "외부유입_페이스북", "외부유입_X(트위터)",
-      "외부유입_Instagram", "외부유입_야후", "외부유입_카카쿠", "외부유입_라인",
-      "외부유입_이메일", "외부유입_기타", "URL직접입력", "기타", "합계(총페이지뷰)",
-    ];
-    const findCandidateCol = (name) => {
-      const withPrefix = findColTrim_(header, "유입채널(PV) : " + name);
-      if (withPrefix !== -1) return { col: withPrefix, matchedHeader: "유입채널(PV) : " + name };
-      const bare = findColTrim_(header, name);
-      if (bare !== -1) return { col: bare, matchedHeader: name };
-      return { col: -1, matchedHeader: null };
-    };
-    const colInfo = {};
-    CANDIDATE_NAMES.forEach((name) => {
-      const found = findCandidateCol(name);
-      colInfo[name] = found.col === -1
-        ? { 헤더없음: true }
-        : { 라벨컬럼: found.col, 실제헤더텍스트: found.matchedHeader, 시프트보정컬럼: resolveShiftedDataCol_(header, found.col) };
-    });
-    Logger.log('[검증: 외부유입 컬럼 위치] "' + sheetName + '" 후보 컬럼별 위치: ' + JSON.stringify(colInfo));
-
-    const sumsAtLabel = {}, sumsAtShifted = {};
-    CANDIDATE_NAMES.forEach((name) => { sumsAtLabel[name] = 0; sumsAtShifted[name] = 0; });
-    for (let i = 1; i < values.length; i++) {
-      const row = values[i];
-      const code = String(row[cCode] || "");
-      if (code !== "1043733766" || !(row[cDate] instanceof Date)) continue;
-      const dateStr = fmtDate_(row[cDate]);
-      if (dateStr < "2026-07-01" || dateStr > "2026-07-09") continue;
-      CANDIDATE_NAMES.forEach((name) => {
-        const info = colInfo[name];
-        if (info.헤더없음) return;
-        sumsAtLabel[name] += Number(row[info.라벨컬럼]) || 0;
-        sumsAtShifted[name] += Number(row[info.시프트보정컬럼]) || 0;
-      });
-    }
-    Logger.log('[검증: 외부유입 원본컬럼] sku=1043733766 2026-07-01~09 라벨컬럼 기준 합계: ' + JSON.stringify(sumsAtLabel));
-    Logger.log('[검증: 외부유입 원본컬럼] sku=1043733766 2026-07-01~09 시프트보정컬럼 기준 합계: ' + JSON.stringify(sumsAtShifted));
-    Logger.log('[검증: 외부유입 원본컬럼] "' + sheetName + '" 전체 헤더 행(1행) 참고용: ' + JSON.stringify(header));
+  // E~BC 52개 채널 컬럼 위치 — cTotal/cExt1~3과 동일한 방식(라벨 찾기 + 밀림 보정)으로
+  // 하나씩 해석한다. diagnoseInflowExpansion_ 실행 결과(52/52 매칭 확인됨)와 같은 로직.
+  const channelCols = INFLOW_CHANNELS_.map((name) => {
+    const withPrefix = findColTrim_(header, "유입채널(PV) : " + name);
+    const labelCol = withPrefix !== -1 ? withPrefix : findColTrim_(header, name);
+    return resolveShiftedDataCol_(header, labelCol);
+  });
+  const missingChannels = INFLOW_CHANNELS_.filter((_, i) => channelCols[i] === -1);
+  if (missingChannels.length > 0) {
+    Logger.log('[readInflowByProduct_] "' + sheetName + '" 헤더에서 못 찾은 채널(0으로 채움): ' + JSON.stringify(missingChannels));
   }
 
   // 검증: SKU=1043733766(3D 크림리필) 2026-07-01~09 PV 합계가 실제 값(85,472)과
@@ -914,15 +934,90 @@ function readInflowByProduct_(ss, sheetName) {
   );
 
   const out = {}; // code -> date -> {...}
+  const namesByCode = {}; // code -> 상품명 (전체 카탈로그 상품용 — 처음 발견된 값 유지)
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
     const code = String(row[cCode] || "");
     if (!code || !(row[cDate] instanceof Date)) continue; // 월 소계 등 텍스트 날짜 행 제외
     const date = fmtDate_(row[cDate]);
     if (!out[code]) out[code] = {};
-    out[code][date] = computeInflowRow_(row, cTotal, cExt1, cExt2, cExt3);
+    const entry = computeInflowRow_(row, cTotal, cExt1, cExt2, cExt3); // 기존 5개 필드 — 산식 불변
+    entry.channels = channelCols.map((c) => (c === -1 ? 0 : (Number(row[c]) || 0))); // E~BC 52개, 추가 필드
+    out[code][date] = entry;
+    if (cName !== -1 && !namesByCode[code]) {
+      const nameVal = normHeader_(row[cName]);
+      if (nameVal) namesByCode[code] = nameVal;
+    }
   }
-  return out;
+  return { byCodeDate: out, namesByCode: namesByCode };
+}
+
+// --------------------------------------------------------------------
+// 2-5-1. 유입 분석용 "전체 카탈로그" (2026-09-02 신규)
+// 메인 9SKU로 제한하지 않고, 25)/26)SHOP_유입현황에 등장하는 모든 상품코드의
+// UNION을 대상으로 한다(180개 + 188개 산술합이 아니라 실제 코드 UNION —
+// KY 요청). skuDaily(거래/고객 결합, 메인 9SKU 전용)와는 완전히 분리된
+// 별도 최상위 필드로 만들어서, 기존 skuDaily를 쓰는 화면(프로모션 일별
+// 분석 등)에는 전혀 영향을 주지 않는다.
+//
+// data.json에 저장하는 형태는 "행마다 같은 키 이름을 반복"하는 배열-of-객체가
+// 아니라 상품별로 컬럼(구조체) 하나씩 묶는 방식이다 — (상품 × 날짜) 조합이
+// 5만 건에 가까워서, 행마다 totalInflow/internalInflow/.../channels 같은
+// 키 이름을 반복하면 그 키 이름 텍스트만으로도 용량이 크게 늘어난다.
+// 프론트에서는 dates[i]/totalInflow[i]/.../channels[i]를 같은 인덱스로
+// 다시 묶어서(rowify) 기존 aggregateRange 등 날짜-행 배열 기반 유틸을
+// 그대로 재사용한다.
+function buildInflowCatalog_(inflow26, inflow25) {
+  const codes = uniq_(Object.keys(inflow25.byCodeDate).concat(Object.keys(inflow26.byCodeDate)));
+  const namesByCode = Object.assign({}, inflow25.namesByCode, inflow26.namesByCode);
+
+  const catalog = {};
+  codes.forEach((code) => {
+    const byDate = Object.assign({}, inflow25.byCodeDate[code] || {}, inflow26.byCodeDate[code] || {});
+    const dates = Object.keys(byDate).sort();
+    const entry = {
+      name: namesByCode[code] || "",
+      dates: dates,
+      totalInflow: [], internalInflow: [], externalInflow: [],
+      externalUrlDirect: [], externalEtc: [], channels: [],
+    };
+    dates.forEach((date) => {
+      const r = byDate[date];
+      entry.totalInflow.push(r.totalInflow);
+      entry.internalInflow.push(r.internalInflow);
+      entry.externalInflow.push(r.externalInflow);
+      entry.externalUrlDirect.push(r.externalUrlDirect || 0);
+      entry.externalEtc.push(r.externalEtc || 0);
+      entry.channels.push(r.channels);
+    });
+    catalog[code] = entry;
+  });
+
+  Logger.log(
+    '[buildInflowCatalog_] 25년 고유코드=' + Object.keys(inflow25.byCodeDate).length +
+    ' 26년 고유코드=' + Object.keys(inflow26.byCodeDate).length +
+    ' UNION(전체 카탈로그)=' + codes.length
+  );
+  return catalog;
+}
+
+// 숍 전체 채널별 PV = "해당 날짜의 전체 상품 채널값 합산" — buildInflowCatalog_가
+// 이미 만든 상품별 데이터에서 그대로 합산한다(시트를 또 읽지 않음). 기존
+// totalInflow/internalInflow/externalInflow(전체 PV/외부/내부 산식)는 이
+// 값과 무관하게 readInflowSheet_ 기준을 그대로 유지한다 — channels는 완전히
+// 별도로 덧붙는 상세 데이터다.
+function sumCatalogChannelsByDate_(catalog) {
+  const byDate = {};
+  const n = INFLOW_CHANNELS_.length;
+  Object.keys(catalog).forEach((code) => {
+    const entry = catalog[code];
+    entry.dates.forEach((date, i) => {
+      if (!byDate[date]) byDate[date] = new Array(n).fill(0);
+      const ch = entry.channels[i];
+      for (let k = 0; k < n; k++) byDate[date][k] += ch[k] || 0;
+    });
+  });
+  return byDate;
 }
 
 // --------------------------------------------------------------------
@@ -1034,4 +1129,91 @@ function uniq_(arr) {
 }
 function slugify_(name) {
   return String(name).replace(/[^\w가-힣]+/g, "").toLowerCase();
+}
+
+// ====================================================================
+// 5. 진단 전용 — 유입 분석 실데이터 확장 전 사전 확인 (읽기 전용, data.json/
+// syncToGitHub()에는 전혀 영향 없음). Apps Script 편집기에서 이 함수만
+// 선택해서 실행 후, 실행 로그(보기 > 실행 기록 또는 Ctrl+Enter 결과창)를
+// 그대로 복사해서 알려주면 그 결과로 본 구현을 진행한다.
+//
+// 확인하는 것:
+//   1) KY가 제공한 52개 채널명(E~BC)이 실제 헤더와 정확히 일치하는지,
+//      기존 4개 컬럼(BD/AR/BB/BC)에서 발견된 "라벨-실값 한 칸 밀림" 패턴이
+//      나머지 채널에도 있는지
+//   2) 26)/25)SHOP_유입현황에 실제로 등장하는 고유 상품코드 수(=data.json에
+//      "전체 카탈로그" 범위로 추가될 상품 수) — data.json 예상 크기 계산용
+//   3) "상품명" 컬럼이 실제로 존재하는지(전체 카탈로그 상품은 프로모션_항목에
+//      이름이 없으므로 이 시트에서 직접 상품명을 가져와야 함)
+// ====================================================================
+function diagnoseInflowExpansion_() {
+  const CHANNELS = INFLOW_CHANNELS_; // 본 구현(readInflowByProduct_)과 동일한 단일 출처
+  const BD_NAME = "합계(총페이지뷰)";
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ["26)SHOP_유입현황", "25)SHOP_유입현황"].forEach((sheetName) => {
+    const sheet = ss.getSheetByName(sheetName);
+    if (!sheet) {
+      Logger.log('[진단:확장] 시트 "' + sheetName + '"를 찾을 수 없습니다.');
+      return;
+    }
+    const values = sheet.getDataRange().getValues();
+    const header = values[0];
+
+    // 1) 52개 채널 + BD(합계) 헤더 매칭 여부 — "유입채널(PV) : " 접두어 붙은/안 붙은 경우 둘 다 시도
+    const findCandidateCol_ = (name) => {
+      const withPrefix = findColTrim_(header, "유입채널(PV) : " + name);
+      if (withPrefix !== -1) return { labelCol: withPrefix, matchedHeader: "유입채널(PV) : " + name };
+      const bare = findColTrim_(header, name);
+      if (bare !== -1) return { labelCol: bare, matchedHeader: name };
+      return { labelCol: -1, matchedHeader: null };
+    };
+    const allNames = CHANNELS.concat([BD_NAME]);
+    const matchReport = allNames.map((name) => {
+      const found = findCandidateCol_(name);
+      if (found.labelCol === -1) return { name: name, found: false };
+      const shifted = resolveShiftedDataCol_(header, found.labelCol);
+      return {
+        name: name, found: true, matchedHeader: found.matchedHeader,
+        라벨컬럼: found.labelCol, 실값컬럼: shifted, 밀림여부: shifted !== found.labelCol,
+      };
+    });
+    const missing = matchReport.filter((m) => !m.found).map((m) => m.name);
+    Logger.log(
+      '[진단:확장] "' + sheetName + '" 채널 헤더 매칭 — ' + (allNames.length - missing.length) + '/' + allNames.length + '개 찾음' +
+      (missing.length ? ', 못 찾은 채널: ' + JSON.stringify(missing) : '')
+    );
+    Logger.log('[진단:확장] "' + sheetName + '" 채널별 컬럼 위치 상세: ' + JSON.stringify(matchReport));
+
+    // 2) 상품명 컬럼 존재 확인 (전체 카탈로그 상품은 이 시트에서 이름을 가져와야 함)
+    const cName = findColTrim_(header, "상품명");
+    Logger.log('[진단:확장] "' + sheetName + '" "상품명" 컬럼: ' + (cName === -1 ? "없음" : "존재(컬럼 " + cName + ")"));
+
+    // 3) 고유 상품코드 수 + 날짜 범위 + 전체 행 수 (data.json 크기 추정용)
+    const cCode = findColTrim_(header, "상품번호");
+    const cDate = findColTrim_(header, "날짜");
+    if (cCode === -1 || cDate === -1) {
+      Logger.log('[진단:확장] "' + sheetName + '" "상품번호" 또는 "날짜" 컬럼을 찾을 수 없어 상품 수 집계를 건너뜁니다.');
+      return;
+    }
+    const codeSet = {};
+    let dateRowCount = 0, minDate = null, maxDate = null;
+    for (let i = 1; i < values.length; i++) {
+      const row = values[i];
+      if (!(row[cDate] instanceof Date)) continue;
+      dateRowCount++;
+      const d = fmtDate_(row[cDate]);
+      if (minDate === null || d < minDate) minDate = d;
+      if (maxDate === null || d > maxDate) maxDate = d;
+      const code = String(row[cCode] || "");
+      if (code) codeSet[code] = (codeSet[code] || 0) + 1;
+    }
+    const codeList = Object.keys(codeSet);
+    Logger.log(
+      '[진단:확장] "' + sheetName + '" 전체 데이터행=' + dateRowCount +
+      ' 기간=' + minDate + '~' + maxDate +
+      ' 고유 상품코드 수=' + codeList.length
+    );
+    Logger.log('[진단:확장] "' + sheetName + '" 상품코드 샘플(최대 20개): ' + JSON.stringify(codeList.slice(0, 20)));
+  });
 }

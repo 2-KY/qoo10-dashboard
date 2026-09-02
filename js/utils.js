@@ -211,6 +211,50 @@ export function seriesForOffsetOrNull(dailyArr, period, offsetIndex) {
 }
 
 // ---------------------------------------------------------------
+// 유입 채널 상세(E~BC) 집계 — 상품/숍전체마다 채널별 PV가 배열(row.channels,
+// 원본 컬럼 순서 그대로)로 들어있는 daily 행을 다룬다. aggregateRows는 필드를
+// 이름으로만 합산하므로 배열 필드는 별도 함수가 필요하다.
+// ---------------------------------------------------------------
+
+// data.inflowCatalog[code](컬럼형: {dates, totalInflow, ..., channels:[[]]})를
+// 기존 aggregateRange/rowsForDayOffset 등이 기대하는 "날짜별 행 배열"로 변환.
+// 실제 데이터에 없는 상품코드(직접 추가했지만 원본에 없는 경우)는 빈 배열 반환
+// — 이후 모든 집계가 자연스럽게 null("데이터 없음")로 이어진다.
+export function rowifyInflowProduct(entry) {
+  if (!entry) return [];
+  return entry.dates.map((date, i) => ({
+    date,
+    totalInflow: entry.totalInflow[i],
+    internalInflow: entry.internalInflow[i],
+    externalInflow: entry.externalInflow[i],
+    externalUrlDirect: entry.externalUrlDirect[i],
+    externalEtc: entry.externalEtc[i],
+    channels: entry.channels[i],
+  }));
+}
+
+// rows(각 행에 channels 배열이 있는 daily 배열)에서 채널별 합계를 구한다.
+function sumChannelsOverRows(rows, channelCount) {
+  const totals = new Array(channelCount).fill(0);
+  rows.forEach((r) => {
+    if (!r.channels) return;
+    for (let i = 0; i < channelCount; i++) totals[i] += r.channels[i] || 0;
+  });
+  return totals;
+}
+
+// seriesForOffsetOrNull과 동일한 규칙(경과일 오프셋, 무효 기간/데이터 없음은 null)을
+// 채널 배열 51개 전체에 적용한 버전. 반환값은 channelCount 길이의 숫자 배열이거나 null.
+export function channelSeriesForOffsetOrNull(rows, period, offsetIndex, channelCount) {
+  if (!rows || !isValidPeriod(period)) return null;
+  const matched = offsetIndex === 0
+    ? filterRange(rows, period.start, period.end)
+    : rowsForDayOffset(rows, period.start, offsetIndex - 1);
+  if (matched.length === 0) return null;
+  return sumChannelsOverRows(matched, channelCount);
+}
+
+// ---------------------------------------------------------------
 // SKU 매출비중 공통 분모 — "메인 SKU 전체 합계 매출" (연간 화면은 연간 합계,
 // 월별 화면은 월 합계로 각각 호출). 화면마다 따로 계산하면 나중에 한쪽만 고치고
 // 다른 쪽을 놓치는 문제가 생기므로 하나의 함수로 통일한다.
