@@ -255,6 +255,54 @@ export function channelSeriesForOffsetOrNull(rows, period, offsetIndex, channelC
 }
 
 // ---------------------------------------------------------------
+// "누계 = 프로모션 시작일부터 현재까지 경과한 기간" (KY 요구사항: 진행 중인
+// 프로모션은 아직 끝나지 않았으므로 period.start~period.end 전체를 누계로 쓰면
+// 안 되고, 실제 데이터가 존재하는 만큼만 금번/직전/전년에 "동일 경과일수"로
+// 적용해야 한다). 기준 시계는 항상 dailyArr(보통 data.shopDaily — 상품/채널별로
+// 들쭉날쭉하지 않은 가장 완전한 데이터셋)로 고정하고, promo.current.start부터
+// 연속으로 실측 데이터(0이 아닌 날)가 있는 날 수를 센다. 이미 끝난 프로모션은
+// 모든 날짜에 실측치가 있으므로 결과적으로 totalDays와 같아져 기존 동작과 동일.
+export function computeElapsedDayCount(dailyArr, promo) {
+  if (!dailyArr || !promo || !isValidPeriod(promo.current)) return 0;
+  const totalDays = daysBetween(promo.current.start, promo.current.end);
+  let count = 0;
+  for (let i = 0; i < totalDays; i++) {
+    const rows = rowsForDayOffset(dailyArr, promo.current.start, i);
+    if (rows.length === 0) break;
+    // 유입(PV) 데이터 자체의 존재 여부만 기준으로 한다 — 매출(sales)은 유입과 별도
+    // 시트/주기로 갱신되어 유입보다 하루 먼저 채워지는 경우가 있으므로(실측 확인됨)
+    // sales를 함께 보면 아직 유입 집계가 안 된 날을 "경과함"으로 잘못 셀 수 있다.
+    const dayTotal = rows.reduce((sum, r) => sum + (r.totalInflow || 0), 0);
+    if (dayTotal === 0) break; // 행은 있지만 유입 데이터가 아직 채워지지 않은(진행 중인 오늘) 날
+    count = i + 1;
+  }
+  return count;
+}
+
+// computeElapsedDayCount로 구한 dayCount를 period(자기 자신의 start 기준)에 그대로
+// 적용해 집계한다. dayCount가 0이거나 기간이 무효면 null("데이터 없음").
+export function aggregateElapsedOrNull(dailyArr, period, dayCount) {
+  if (!dailyArr || !isValidPeriod(period) || dayCount <= 0) return null;
+  let rows = [];
+  for (let i = 0; i < dayCount; i++) {
+    rows = rows.concat(rowsForDayOffset(dailyArr, period.start, i));
+  }
+  if (rows.length === 0) return null;
+  return aggregateRows(rows);
+}
+
+// aggregateElapsedOrNull의 채널(51개 배열) 버전.
+export function channelElapsedOrNull(dailyArr, period, dayCount, channelCount) {
+  if (!dailyArr || !isValidPeriod(period) || dayCount <= 0) return null;
+  let rows = [];
+  for (let i = 0; i < dayCount; i++) {
+    rows = rows.concat(rowsForDayOffset(dailyArr, period.start, i));
+  }
+  if (rows.length === 0) return null;
+  return sumChannelsOverRows(rows, channelCount);
+}
+
+// ---------------------------------------------------------------
 // SKU 매출비중 공통 분모 — "메인 SKU 전체 합계 매출" (연간 화면은 연간 합계,
 // 월별 화면은 월 합계로 각각 호출). 화면마다 따로 계산하면 나중에 한쪽만 고치고
 // 다른 쪽을 놓치는 문제가 생기므로 하나의 함수로 통일한다.

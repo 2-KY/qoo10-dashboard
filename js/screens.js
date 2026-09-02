@@ -10,6 +10,7 @@ import {
   rowsForDayOffset, buildPromoDayLabels, resolveMainSkus, sumMainSkuSales,
   isValidPeriod, aggregateRangeOrNull, seriesForOffsetOrNull,
   rowifyInflowProduct, channelSeriesForOffsetOrNull,
+  computeElapsedDayCount, aggregateElapsedOrNull, channelElapsedOrNull,
 } from "./utils.js";
 import {
   kpiCardHTML, triCompareBarHTML, renderTabs, renderPills,
@@ -604,6 +605,13 @@ function parseChannelList_(rawNames) {
   return items;
 }
 
+// title(tooltip) 속성에 상품명을 넣을 때 따옴표/꺾쇠 등으로 마크업이 깨지지 않도록 이스케이프.
+function escapeAttr_(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 const SHOP_ALL_CODE = "SHOP_ALL";
 const SHOP_ALL_LABEL = "숍 전체";
 const PINNED_KEY_ = "qoo10_inflow_pinned_products";
@@ -666,6 +674,12 @@ export function renderInflow(data, promoId) {
   const catalogList = Object.keys(catalog).map((code) => ({ code, name: catalog[code].name || `상품 ${code}` }));
   const mainSkus = resolveMainSkus(data, promo.id);
 
+  // "누계" = 프로모션 시작일부터 실제 데이터가 존재하는 지금까지의 경과일수.
+  // 기준 시계는 항상 숍 전체(data.shopDaily)로 고정 — 상품/채널마다 다른
+  // 경과일을 쓰면 금번/직전/전년 간 비교 기준이 흔들리기 때문. 이미 끝난
+  // 프로모션은 전체 기간에 실측치가 있으므로 결과적으로 총 기간과 같아진다.
+  const elapsedDays = computeElapsedDayCount(data.shopDaily, promo);
+
   // rowify 캐시 — 이번 renderInflow 호출(=프로모션 선택/전환) 동안만 유지.
   // 숍전체는 이미 data.shopDaily가 날짜-행 배열이라 변환 없이 그대로 쓴다.
   const rowsCache = {};
@@ -703,11 +717,12 @@ export function renderInflow(data, promoId) {
     </div>`;
 
   // ---- 1. 유입 전체 현황 KPI — 숍 전체(data.shopDaily) 누계, 실제 데이터 ----
-  // KPI 요약/TOP10은 선택한 프로모션 기간 전체(누계, offset 0) 기준으로 고정한다.
-  // "누계/일별" 전환은 아래 "전체 채널 상세 분석"에만 적용된다(레이아웃 유지).
-  const shopCurTotal = seriesForOffsetOrNull(data.shopDaily, promo.current, 0);
-  const shopPrevTotal = seriesForOffsetOrNull(data.shopDaily, promo.previous, 0);
-  const shopYoyTotal = seriesForOffsetOrNull(data.shopDaily, promo.yoy, 0);
+  // KPI 요약/TOP10은 "프로모션 시작일부터 현재까지 경과한 기간의 누계"로 고정한다
+  // (elapsedDays — 위에서 계산). "누계/일별" 전환은 아래 "전체 채널 상세 분석"에만
+  // 적용된다(레이아웃 유지).
+  const shopCurTotal = aggregateElapsedOrNull(data.shopDaily, promo.current, elapsedDays);
+  const shopPrevTotal = aggregateElapsedOrNull(data.shopDaily, promo.previous, elapsedDays);
+  const shopYoyTotal = aggregateElapsedOrNull(data.shopDaily, promo.yoy, elapsedDays);
   const summaryDefs = [
     { label: "전체 PV", key: "totalInflow" },
     { label: "내부유입", key: "internalInflow" },
@@ -740,9 +755,9 @@ export function renderInflow(data, promoId) {
     const metricKey = inflowState_.top10Tab;
     let rows = catalogList.map((p) => {
       const r = getRows(p.code);
-      const cur = seriesForOffsetOrNull(r, promo.current, 0);
-      const prev = seriesForOffsetOrNull(r, promo.previous, 0);
-      const yoy = seriesForOffsetOrNull(r, promo.yoy, 0);
+      const cur = aggregateElapsedOrNull(r, promo.current, elapsedDays);
+      const prev = aggregateElapsedOrNull(r, promo.previous, elapsedDays);
+      const yoy = aggregateElapsedOrNull(r, promo.yoy, elapsedDays);
       return {
         name: p.name, code: p.code,
         cur: cur ? cur[metricKey] : null,
@@ -759,7 +774,7 @@ export function renderInflow(data, promoId) {
         const yoyDiff = hasVal(r.yoy) ? r.cur - r.yoy : null;
         return `<tr class="inflow-top10-row" data-code="${r.code}" style="cursor:pointer;">
           <td class="name">${i + 1}</td>
-          <td class="name">${r.name}</td>
+          <td class="name" title="${escapeAttr_(productLabelFor(r.code))}">상품번호 ${r.code}</td>
           <td class="num">${fmtNum(r.cur)}</td>
           <td class="num sub">${fmtNum(r.prev)}</td>
           <td class="num sub">${hasVal(r.yoy) ? fmtNum(r.yoy) : "—"}</td>
@@ -800,8 +815,24 @@ export function renderInflow(data, promoId) {
       (key) => { inflowState_.periodMode = key; drawDayPills(); drawDetailArea(); }
     );
   }
-  function currentOffset() {
-    return inflowState_.periodMode === "daily" ? inflowState_.dayIndex + 1 : 0;
+  // 전체 채널 상세 분석의 금번/직전/전년 채널 배열(51개)을 periodMode에 맞게 조회한다.
+  // - 일별: 선택한 경과일(day pill) 하루치만(기존 동작 그대로).
+  // - 누계: 프로모션 시작일부터 "실제 데이터가 존재하는 지금까지"의 경과일수(elapsedDays)를
+  //   금번/직전/전년에 동일하게 적용 — period.end까지 무조건 합산하지 않는다.
+  function channelTripletFor(rows) {
+    if (inflowState_.periodMode === "daily") {
+      const offset = inflowState_.dayIndex + 1;
+      return {
+        cur: channelSeriesForOffsetOrNull(rows, promo.current, offset, CHANNEL_COUNT),
+        prev: channelSeriesForOffsetOrNull(rows, promo.previous, offset, CHANNEL_COUNT),
+        yoy: channelSeriesForOffsetOrNull(rows, promo.yoy, offset, CHANNEL_COUNT),
+      };
+    }
+    return {
+      cur: channelElapsedOrNull(rows, promo.current, elapsedDays, CHANNEL_COUNT),
+      prev: channelElapsedOrNull(rows, promo.previous, elapsedDays, CHANNEL_COUNT),
+      yoy: channelElapsedOrNull(rows, promo.yoy, elapsedDays, CHANNEL_COUNT),
+    };
   }
   function drawDayPills() {
     const labels = buildPromoDayLabels(promo); // ["누계","0.5일차"/"1일차",...] — 0.5일차(메가와리) 포함
@@ -861,7 +892,7 @@ export function renderInflow(data, promoId) {
         containerEl.innerHTML = codes
           .map((code) => `
             <span class="tab${inflowState_.selectedProductCode === code ? " active" : ""}" data-code="${code}" style="display:inline-flex; align-items:center; gap:4px;">
-              <span data-role="select">${productLabelFor(code)}${code.match(/^\d{10}$/) ? " " + code : ""}</span>
+              <span data-role="select" title="${escapeAttr_(productLabelFor(code))}">상품번호 ${code}</span>
               <button class="pin-btn${pinnedGroup ? " pinned" : ""}" data-action="${pinnedGroup ? "unpin" : "pin"}" data-code="${code}" title="${pinnedGroup ? "고정 해제" : "고정"}">📌</button>
               <button class="del-btn" data-action="delete" data-code="${code}" title="삭제">×</button>
             </span>`)
@@ -984,7 +1015,6 @@ export function renderInflow(data, promoId) {
   // ---- 상세 영역: 상품 기준(채널 51개 전체, 그룹 표시) / 채널 기준(상품 표) ----
   function drawDetailArea() {
     const wrap = $("inflow-detail-wrap");
-    const offset = currentOffset();
     if (inflowState_.viewMode === "product") {
       const productLabel = productLabelFor(inflowState_.selectedProductCode);
       wrap.innerHTML = `
@@ -1000,9 +1030,7 @@ export function renderInflow(data, promoId) {
         </div>`;
 
       const rows = getRows(inflowState_.selectedProductCode);
-      const curArr = channelSeriesForOffsetOrNull(rows, promo.current, offset, CHANNEL_COUNT);
-      const prevArr = channelSeriesForOffsetOrNull(rows, promo.previous, offset, CHANNEL_COUNT);
-      const yoyArr = channelSeriesForOffsetOrNull(rows, promo.yoy, offset, CHANNEL_COUNT);
+      const { cur: curArr, prev: prevArr, yoy: yoyArr } = channelTripletFor(rows);
       const valueFor = (arr, idx) => (arr ? arr[idx] : null);
 
       const renderChannelRows = () => {
@@ -1052,9 +1080,7 @@ export function renderInflow(data, promoId) {
 
       const valueForProduct = (code) => {
         const r = getRows(code);
-        const curArr = channelSeriesForOffsetOrNull(r, promo.current, offset, CHANNEL_COUNT);
-        const prevArr = channelSeriesForOffsetOrNull(r, promo.previous, offset, CHANNEL_COUNT);
-        const yoyArr = channelSeriesForOffsetOrNull(r, promo.yoy, offset, CHANNEL_COUNT);
+        const { cur: curArr, prev: prevArr, yoy: yoyArr } = channelTripletFor(r);
         return {
           cur: curArr ? curArr[channelIdx] : null,
           prev: prevArr ? prevArr[channelIdx] : null,
