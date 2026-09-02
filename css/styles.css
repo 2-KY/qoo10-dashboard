@@ -305,6 +305,110 @@ td.tbd{color:var(--text-faint); font-style:italic; font-weight:500;}
 .acc-body.wide-table{max-height:4000px;}
 .acc-body-inner.flush{padding:0;}
 
+/* ---------- 프로모션 보고 ---------- */
+.report-divider{border-top:1px dashed var(--border); margin:16px 0;}
+.report-bullets{list-style:none; padding:0; margin:0;}
+.report-bullets .tbd{color:var(--text-faint); font-style:italic; padding:8px 10px; display:block;}
+.report-change-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+.report-change-head{
+  font-size:11px; font-weight:700; letter-spacing:.03em; text-transform:uppercase;
+  margin-bottom:6px; padding:2px 8px; border-radius:6px; display:inline-block;
+}
+.report-change-head.up{color:var(--pos); background:#E7F8EF;}
+.report-change-head.down{color:var(--neg); background:#FDEDEC;}
+
+/* AI 분석 요약: 3개 compact 카드(매출/전환·유입·상품) */
+.report-insight-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:10px;}
+.report-insight-card{
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+  padding:12px 14px; min-height:0;
+}
+.report-insight-card .ri-label{
+  font-size:10.5px; font-weight:700; color:var(--text-sub); text-transform:uppercase;
+  letter-spacing:.03em; margin-bottom:5px;
+}
+.report-insight-card .ri-value{font-size:17px; font-weight:800; line-height:1.3; margin-bottom:4px;}
+.report-insight-card .ri-value .pos{color:var(--pos);}
+.report-insight-card .ri-value .neg{color:var(--neg);}
+.report-insight-card .ri-sub{font-size:11.5px; color:var(--text-sub); line-height:1.55;}
+.report-insight-card .ri-sub b{color:var(--text-main, #1A1D24); font-weight:700;}
+
+/* 주요 유입 변화: 채널 행 — 이름/배지 + PV 강조 + %는 보조 */
+.report-channel-row{
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:8px 10px; border-bottom:1px solid var(--border); font-size:12.5px;
+}
+.report-channel-row:last-child{border-bottom:none;}
+.report-channel-row .ch-name{display:flex; align-items:center; gap:6px; min-width:0;}
+.report-channel-row .ch-name span:first-child{
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600;
+}
+.report-channel-row .ch-tag{
+  flex-shrink:0; font-size:9.5px; font-weight:700; padding:1px 6px; border-radius:8px;
+  background:var(--bg); color:var(--text-sub); border:1px solid var(--border);
+}
+.report-channel-row .ch-metric{text-align:right; flex-shrink:0;}
+.report-channel-row .ch-metric b{font-size:13px;}
+.report-channel-row .ch-metric .sub{display:block; font-size:10.5px; color:var(--text-sub);}
+.report-channel-row.up .ch-metric b{color:var(--pos);}
+.report-channel-row.down .ch-metric b{color:var(--neg);}
+
+/* 주요 상품 변화: 상품 행 — 코드/이름 + 매출·PV 메트릭 칩 */
+.report-product-row{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:8px 10px; border-bottom:1px solid var(--border); font-size:12.5px;
+}
+.report-product-row:last-child{border-bottom:none;}
+.report-product-row .p-name{min-width:0; overflow:hidden;}
+.report-product-row .p-name .code{font-weight:800;}
+.report-product-row .p-name .name{
+  display:block; font-size:11px; color:var(--text-sub); overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; max-width:220px;
+}
+.report-product-row .p-metrics{display:flex; gap:12px; flex-shrink:0;}
+.report-product-row .p-metric{text-align:right;}
+.report-product-row .p-metric .m-label{font-size:9.5px; color:var(--text-faint); text-transform:uppercase;}
+.report-product-row .p-metric .m-value{font-size:12.5px; font-weight:700;}
+.report-product-row .p-metric .m-value.pos{color:var(--pos);}
+.report-product-row .p-metric .m-value.neg{color:var(--neg);}
+
+/* 상황기록: 타임라인 카드 */
+.report-event-card{
+  display:flex; gap:10px; padding:9px 10px; border-bottom:1px solid var(--border); font-size:12.5px;
+}
+.report-event-card:last-child{border-bottom:none;}
+.report-event-card .ev-date{
+  flex-shrink:0; font-size:11px; font-weight:700; color:#fff; background:var(--cur);
+  border-radius:6px; padding:3px 7px; height:fit-content; white-space:nowrap;
+}
+.report-event-card .ev-body{min-width:0;}
+.report-event-card .ev-head{display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-bottom:2px;}
+.report-event-card .ev-type{
+  font-size:10px; font-weight:700; padding:1px 6px; border-radius:8px;
+  background:var(--bg); color:var(--text-sub); border:1px solid var(--border);
+}
+.report-event-card .ev-target{font-weight:700;}
+.report-event-card .ev-content{color:var(--text-sub);}
+.report-event-card .ev-note{font-size:11px; color:var(--text-faint); font-style:italic; margin-top:2px;}
+.report-event-card .ev-metric{font-size:11px; margin-top:3px;}
+.report-event-card .ev-metric b.pos{color:var(--pos);}
+.report-event-card .ev-metric b.neg{color:var(--neg);}
+.report-event-disclaimer{font-size:11px; color:var(--text-faint); padding:8px 10px 0; font-style:italic;}
+
+.report-textarea{
+  width:100%; box-sizing:border-box; border:1px solid var(--border); border-radius:8px;
+  padding:14px 16px; font-size:13px; line-height:1.6; font-family:inherit; resize:vertical;
+  background:var(--surface); color:var(--text-main, #1A1D24);
+}
+.report-source-badge{font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:10px; margin-left:8px;}
+.report-source-badge.ai{background:#E7F8EF; color:var(--pos);}
+.report-source-badge.fallback{background:#FFF3CD; color:#92660A;}
+
+@media (max-width:900px){
+  .report-change-grid{grid-template-columns:1fr;}
+  .report-insight-grid{grid-template-columns:1fr;}
+}
+
 ::-webkit-scrollbar{width:8px;height:8px;}
 ::-webkit-scrollbar-thumb{background:#D5D8DE;border-radius:4px;}
 

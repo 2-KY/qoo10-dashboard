@@ -16,6 +16,10 @@ import {
   kpiCardHTML, triCompareBarHTML, renderTabs, renderPills,
   skuBadgeHTML, renderMetricCompareRows, metricRowHTML,
 } from "./components.js";
+import {
+  computeReportFacts, generateReportNarrative, buildAIPromptPayload, parseAIReportResponse, productTooltipFor,
+  directionalContributionClause_, pickPrimarySalesProduct_,
+} from "./report.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -1171,4 +1175,287 @@ export function renderCoupon(data, promoId) {
       </tr>`;
     })
     .join("");
+}
+
+/* ================================================================
+   7. 프로모션 보고
+   숫자는 report.js(computeReportFacts)가 전부 계산하고, 이 함수는 그 결과를
+   화면에 채워 넣기만 한다. AI 문안(/api/report)이 실패하거나 아직 설정되지
+   않은 경우 report.js의 규칙기반 문안(generateReportNarrative)으로 자동
+   폴백한다 — 어느 쪽이든 화면은 항상 완전하게 동작해야 한다(KY 요구사항).
+   ================================================================ */
+const reportState_ = {}; // promoId -> { periodMode, dayIndex }
+let reportRequestSeq_ = 0; // 프로모션/기간 전환 중 도착한 AI 응답이 최신 화면을 덮어쓰지 않도록 하는 토큰
+
+export function renderReport(data, promoId) {
+  const promo = data.promotions.find((p) => p.id === promoId);
+  if (!promo) return;
+  if (!reportState_[promo.id]) reportState_[promo.id] = { periodMode: "cumulative", dayIndex: 0 };
+  const st = reportState_[promo.id];
+
+  $("report-title").textContent = `프로모션 보고 — ${promo.year}년 ${promo.month}월 ${promo.name}`;
+
+  function fmtRange(range) {
+    if (!range) return "데이터 없음";
+    return range.start === range.end ? range.start : `${range.start} ~ ${range.end}`;
+  }
+
+  function drawPeriods(facts) {
+    // 0.5일차(메가와리) 규칙을 반영한 정확한 일차 라벨 — day pill과 동일한
+    // buildPromoDayLabels 결과를 그대로 사용한다(별도로 "N일차"를 계산하지 않음).
+    const label = facts.periodMode === "daily"
+      ? buildPromoDayLabels(promo).slice(1)[facts.dayIndex]
+      : `${facts.elapsedDays}일차 누계`;
+    $("report-periods").innerHTML = `
+      <div class="titles">
+        <div class="eyebrow">프로모션 보고 · ${label}</div>
+        <h2>${facts.promo.year}년 ${facts.promo.month}월 · ${facts.promo.name}</h2>
+        <div class="periods">
+          <span class="period"><i class="dotc" style="background:var(--cur)"></i>분석 기간 <b>${fmtRange(facts.ranges.current)}</b></span>
+          <span class="period"><i class="dotc" style="background:var(--prev)"></i>직전 동일 경과기간 <b>${fmtRange(facts.ranges.previous)}</b></span>
+          <span class="period"><i class="dotc" style="background:var(--yoy)"></i>전년 동일 경과기간 <b>${fmtRange(facts.ranges.yoy)}</b></span>
+        </div>
+      </div>`;
+  }
+
+  function drawPeriodModeTabs() {
+    renderTabs(
+      $("report-periodmode-tabs"),
+      [{ key: "cumulative", label: "누계" }, { key: "daily", label: "일별" }],
+      st.periodMode,
+      (key) => { st.periodMode = key; st.dayIndex = 0; draw(); }
+    );
+  }
+
+  function drawDayPills() {
+    const wrap = $("report-day-pills");
+    if (st.periodMode !== "daily") { wrap.innerHTML = ""; return; }
+    const labels = buildPromoDayLabels(promo).slice(1); // "누계" 제외 — 0.5일차 규칙 포함, 기존 화면과 동일
+    renderPills(wrap, labels, st.dayIndex, (i) => { st.dayIndex = i; draw(); });
+  }
+
+  function drawKpi(facts) {
+    const defs = [
+      { label: "매출", m: facts.overall.sales, fmt: fmtYen },
+      { label: "판매수량", m: facts.overall.qty, fmt: (v) => fmtNum(v) + "개" },
+      { label: "주문수", m: facts.overall.orders, fmt: (v) => fmtNum(v) + "건" },
+      { label: "전체 PV", m: facts.overall.pv, fmt: fmtNum },
+      { label: "유입자수(UV)", m: facts.overall.uv, fmt: fmtNum },
+      { label: "CVR", m: facts.overall.cvr, fmt: (v) => fmtPct(v, 1) },
+      { label: "신규 고객", m: facts.overall.newCustomers, fmt: fmtNum },
+      { label: "기존 고객", m: facts.overall.existingCustomers, fmt: fmtNum },
+      { label: "신규 비중", m: facts.overall.newRatio, fmt: (v) => fmtPct(v, 0) },
+      { label: "기존 비중", m: facts.overall.existingRatio, fmt: (v) => fmtPct(v, 0) },
+      { label: "내부유입", m: facts.overall.internalInflow, fmt: fmtNum },
+      { label: "외부유입", m: facts.overall.externalInflow, fmt: fmtNum },
+    ];
+    $("report-kpi").innerHTML = defs
+      .map((d) => kpiCardHTML({
+        label: d.label,
+        value: hasVal(d.m.cur) ? d.fmt(d.m.cur) : "—",
+        prevPct: d.m.prevPct, yoyPct: d.m.yoyPct, isPP: !!d.m.isPP,
+      }))
+      .join("");
+  }
+
+  // 채널명으로 내부/외부 배지만 판정하는 표시 전용 헬퍼(계산 로직 아님) —
+  // report.js의 실제 내부/외부유입 산식(externalInflow = 외부유입_전체+URL직접입력+
+  // 기타)은 그대로 두고, 여기서는 UI 배지 문구만 결정한다.
+  function channelTag_(name) {
+    return name.startsWith("외부유입_") || name === "URL직접입력" || name === "기타" ? "외부" : "내부";
+  }
+
+  function drawInflowChanges(facts) {
+    const row = (c, dirCls) => {
+      const sign = c.diff >= 0 ? "+" : "";
+      const pctStr = c.pct !== null ? `${c.pct >= 0 ? "+" : ""}${c.pct.toFixed(1)}%` : "—";
+      return `<div class="report-channel-row ${dirCls}">
+        <div class="ch-name"><span title="${escapeAttr_(c.channel)}">${escapeAttr_(c.channel)}</span><span class="ch-tag">${channelTag_(c.channel)}</span></div>
+        <div class="ch-metric"><b>${sign}${fmtNum(c.diff)}</b>PV<span class="sub">${pctStr}</span></div>
+      </div>`;
+    };
+    $("report-inflow-up").innerHTML = facts.inflow.topIncreaseChannels.length
+      ? facts.inflow.topIncreaseChannels.map((c) => row(c, "up")).join("")
+      : `<div class="tbd">뚜렷한 증가 채널이 없습니다</div>`;
+    $("report-inflow-down").innerHTML = facts.inflow.topDecreaseChannels.length
+      ? facts.inflow.topDecreaseChannels.map((c) => row(c, "down")).join("")
+      : `<div class="tbd">뚜렷한 감소 채널이 없습니다</div>`;
+  }
+
+  function drawProductChanges(facts) {
+    function metricChip(entry, label, fmt) {
+      if (!entry) return "";
+      const cls = entry.diff >= 0 ? "pos" : "neg";
+      const sign = entry.diff >= 0 ? "+" : "-";
+      const pctStr = entry.pct !== null ? `${entry.pct >= 0 ? "+" : ""}${entry.pct.toFixed(1)}%` : "—";
+      return `<div class="p-metric"><div class="m-label">${label}</div><div class="m-value ${cls}">${sign}${fmt(Math.abs(entry.diff))}</div><div class="m-label">${pctStr}</div></div>`;
+    }
+    // 매출(메인 9SKU만 가능)과 PV(203개 카탈로그 전체)를 같은 상품이면 한 행으로
+    // 합쳐서 보여준다 — 실제 데이터 구조상 매출은 메인 SKU에서만 계산 가능하다
+    // (임의 확장 없음). 순서는 매출 리스트 우선, PV 전용 상품은 뒤에 추가.
+    function mergedRows(salesList, pvList) {
+      const order = [];
+      const byCode = {};
+      salesList.forEach((e) => {
+        if (!byCode[e.code]) { byCode[e.code] = { code: e.code, tooltip: e.tooltip }; order.push(e.code); }
+        byCode[e.code].sales = e;
+      });
+      pvList.forEach((e) => {
+        if (!byCode[e.code]) { byCode[e.code] = { code: e.code, tooltip: e.tooltip }; order.push(e.code); }
+        byCode[e.code].pv = e;
+      });
+      return order.map((c) => byCode[c]).slice(0, 5);
+    }
+    function row(r) {
+      return `<div class="report-product-row">
+        <div class="p-name"><span class="code">${r.code}</span><span class="name" title="${escapeAttr_(r.tooltip)}">${escapeAttr_(r.tooltip)}</span></div>
+        <div class="p-metrics">${metricChip(r.sales, "매출", fmtYen)}${metricChip(r.pv, "PV", fmtNum)}</div>
+      </div>`;
+    }
+    const upRows = mergedRows(facts.products.topSalesIncrease, facts.products.topPvIncrease);
+    const downRows = mergedRows(facts.products.topSalesDecrease, facts.products.topPvDecrease);
+    $("report-product-up").innerHTML = upRows.length ? upRows.map(row).join("") : `<div class="tbd">뚜렷한 매출/PV 증가 상품이 없습니다</div>`;
+    $("report-product-down").innerHTML = downRows.length ? downRows.map(row).join("") : `<div class="tbd">뚜렷한 매출/PV 감소 상품이 없습니다</div>`;
+  }
+
+  function drawEvents(facts) {
+    const wrap = $("report-events");
+    if (!facts.situationLogConfirmed) {
+      wrap.innerHTML = `<div class="tbd">상황기록 시트가 아직 연동되지 않았습니다.</div>`;
+      return;
+    }
+    if (facts.events.length === 0) {
+      wrap.innerHTML = `<div class="tbd">확인된 특이사항 없음</div>`;
+      return;
+    }
+    const cards = facts.events.map((ev) => {
+      const targetLabel = ev.targetType === "상품" && ev.target
+        ? `<span class="ev-target">${ev.target}(${escapeAttr_(productTooltipFor(ev.target, data.inflowCatalog || {}, resolveMainSkus(data, promo.id)))})</span>`
+        : (ev.target ? `<span class="ev-target">${escapeAttr_(ev.target)}</span>` : (ev.targetType && ev.targetType !== "상품" ? `<span class="ev-target">${escapeAttr_(ev.targetType)}</span>` : ""));
+      const dateLabel = ev.endDate && ev.endDate !== ev.date ? `${ev.date}~${ev.endDate}` : ev.date;
+      const typeBadge = ev.type ? `<span class="ev-type">${escapeAttr_(ev.type)}</span>` : "";
+      let metricLine = "";
+      if (ev.related && hasVal(ev.related.cur) && ev.related.prevPct !== null) {
+        const cls = ev.related.prevPct >= 0 ? "pos" : "neg";
+        const arrow = ev.related.prevPct >= 0 ? "▲" : "▼";
+        metricLine = `<div class="ev-metric">해당일 ${escapeAttr_(ev.related.label)} <b class="${cls}">${arrow} ${Math.abs(ev.related.prevPct).toFixed(1)}%</b></div>`;
+      }
+      return `<div class="report-event-card">
+        <div class="ev-date">${dateLabel}</div>
+        <div class="ev-body">
+          <div class="ev-head">${typeBadge}${targetLabel}</div>
+          ${ev.content ? `<div class="ev-content">${escapeAttr_(ev.content)}</div>` : ""}
+          ${ev.note ? `<div class="ev-note">비고: ${escapeAttr_(ev.note)}</div>` : ""}
+          ${metricLine}
+        </div>
+      </div>`;
+    });
+    wrap.innerHTML = cards.join("")
+      + `<div class="report-event-disclaimer">위 실적 변화는 상황 발생 시점과 같은 시기에 나타난 사실이며, 상황으로 인한 결과라고 단정할 수는 없습니다.</div>`;
+  }
+
+  // compact 3카드(매출/전환·유입·상품) — facts에서 직접 뽑는다(AI 문장을
+  // 파싱하지 않음, 숫자는 항상 facts가 원본). 카드 자체에는 핵심 수치만
+  // 담고, contributionPct 등 상세 근거는 아래 "보고용 문안"에서 확인한다.
+  function renderInsightCardsFromFacts(facts) {
+    const o = facts.overall;
+    function delta(pct, isPP) {
+      if (!hasVal(pct)) return "";
+      const cls = pct >= 0 ? "pos" : "neg";
+      const label = isPP ? `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%p` : `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
+      return `<span class="${cls}">${label}</span>`;
+    }
+    const salesCard = hasVal(o.sales.cur)
+      ? `<div class="report-insight-card">
+          <div class="ri-label">매출/전환</div>
+          <div class="ri-value">${fmtYen(o.sales.cur)} ${delta(o.sales.prevPct)}</div>
+          <div class="ri-sub">판매수량 ${delta(o.qty.prevPct)} · CVR ${hasVal(o.cvr.cur) ? o.cvr.cur.toFixed(1) + "%" : "—"} (${delta(o.cvr.prevPct, true)})</div>
+        </div>`
+      : `<div class="report-insight-card"><div class="ri-label">매출/전환</div><div class="ri-sub tbd">비교 데이터 없음</div></div>`;
+
+    const inflowCard = hasVal(o.pv.cur)
+      ? `<div class="report-insight-card">
+          <div class="ri-label">유입</div>
+          <div class="ri-value">${fmtNum(o.pv.cur)}PV ${delta(o.pv.prevPct)}</div>
+          <div class="ri-sub">내부유입 ${delta(o.internalInflow.prevPct)} · 외부유입 ${delta(o.externalInflow.prevPct)}</div>
+        </div>`
+      : `<div class="report-insight-card"><div class="ri-label">유입</div><div class="ri-sub tbd">비교 데이터 없음</div></div>`;
+
+    const primary = pickPrimarySalesProduct_(facts);
+    const productCard = primary
+      ? `<div class="report-insight-card">
+          <div class="ri-label">상품</div>
+          <div class="ri-value">${primary.code} ${delta(primary.pct)}</div>
+          <div class="ri-sub"><b>${escapeAttr_(primary.tooltip)}</b>${directionalContributionClause_(primary.diff, primary.contributionPct, o.sales.cur - o.sales.prev, "매출")}</div>
+        </div>`
+      : `<div class="report-insight-card"><div class="ri-label">상품</div><div class="ri-sub tbd">뚜렷한 매출 변화 없음</div></div>`;
+
+    return salesCard + inflowCard + productCard;
+  }
+  // AI가 실제로 연결됐을 때는 자유 문장(bullets)이 오므로 카드 격자 폭 전체를
+  // 쓰는 카드 하나에 줄바꿈으로 나열한다(구조화 카드는 규칙기반 전용).
+  function renderInsightCardsFromAI(bullets) {
+    return `<div class="report-insight-card" style="grid-column:1/-1;">
+      <div class="ri-label">AI 분석</div>
+      ${bullets.map((b) => `<div class="ri-sub" style="margin-bottom:4px;">${escapeAttr_(b)}</div>`).join("")}
+    </div>`;
+  }
+
+  function drawAISummaryAndReport(facts) {
+    const narrative = generateReportNarrative(facts);
+    const titleEl = $("report-ai-summary-title");
+
+    function applySummary(source, bullets, reportText, sourceBadge) {
+      titleEl.innerHTML = `AI 분석 요약 <span class="report-source-badge ${sourceBadge.cls}">${sourceBadge.text}</span>`;
+      $("report-ai-summary").innerHTML = source === "facts" ? renderInsightCardsFromFacts(facts) : renderInsightCardsFromAI(bullets);
+      $("report-text").value = reportText;
+    }
+
+    // 1) 즉시 규칙기반 요약을 먼저 그린다 — AI 응답을 기다리는 동안 화면이 비지 않게.
+    applySummary("facts", narrative.summaryBullets, narrative.reportText, { cls: "fallback", text: "자동 요약(AI 미연동)" });
+
+    // 2) 서버리스 함수(/api/report)를 시도 — 로컬 정적 서버(npx serve)에는 이
+    //    엔드포인트가 없고, Vercel에 배포되어도 ANTHROPIC_API_KEY가 없으면
+    //    501을 반환한다. 두 경우 모두 위에서 이미 그린 규칙기반 요약을 그대로 둔다.
+    const mySeq = ++reportRequestSeq_;
+    const { systemPrompt, userPrompt } = buildAIPromptPayload(facts);
+    fetch("/api/report", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ systemPrompt, userPrompt }),
+    })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("HTTP " + res.status))))
+      .then((json) => {
+        const parsed = parseAIReportResponse(json.text);
+        if (!parsed) return Promise.reject(new Error("PARSE_FAILED"));
+        if (mySeq !== reportRequestSeq_) return; // 그 사이 다른 프로모션/기간으로 전환됨 — 폐기
+        applySummary("ai", parsed.summaryBullets, parsed.reportText, { cls: "ai", text: "AI 생성" });
+      })
+      .catch(() => { /* AI 미연동/실패 — 이미 표시된 규칙기반 요약 유지(화면을 막지 않음) */ });
+  }
+
+  function draw() {
+    const facts = computeReportFacts(data, promo.id, st.periodMode, st.dayIndex);
+    drawPeriods(facts);
+    drawPeriodModeTabs();
+    drawDayPills();
+    drawKpi(facts);
+    drawInflowChanges(facts);
+    drawProductChanges(facts);
+    drawEvents(facts);
+    drawAISummaryAndReport(facts);
+  }
+
+  const copyBtn = $("report-copy-btn");
+  if (!copyBtn.dataset.bound) {
+    copyBtn.dataset.bound = "1";
+    copyBtn.addEventListener("click", () => {
+      const hint = $("report-copy-hint");
+      navigator.clipboard.writeText($("report-text").value)
+        .then(() => { hint.textContent = "복사되었습니다."; setTimeout(() => { hint.textContent = ""; }, 2000); })
+        .catch(() => { hint.textContent = "복사에 실패했습니다 — 직접 선택해 복사해 주세요."; });
+    });
+  }
+
+  draw();
 }

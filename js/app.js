@@ -4,7 +4,7 @@
  */
 import { CONFIG } from "./config.js";
 import { loadData } from "./data.js";
-import { renderAnnual, renderMonthly, renderPromo, renderDaily, renderInflow, renderCoupon } from "./screens.js";
+import { renderAnnual, renderMonthly, renderPromo, renderDaily, renderInflow, renderCoupon, renderReport } from "./screens.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -20,6 +20,7 @@ const state = {
   dailyPromoId: null,
   inflowPromoId: null,
   couponPromoId: null,
+  reportPromoId: null,
 };
 
 function availableYears() {
@@ -46,6 +47,7 @@ function buildTopbar() {
     daily: "프로모션 일별 분석",
     inflow: "유입 분석",
     coupon: "쿠폰 분석",
+    report: "프로모션 보고",
   };
   let filtersHTML = "";
 
@@ -78,6 +80,10 @@ function buildTopbar() {
     filtersHTML = `<select class="dd-select" id="f-coupon-promo">${promoOptions()
       .map((o) => `<option value="${o.value}" ${o.value === state.couponPromoId ? "selected" : ""}>${o.label}</option>`)
       .join("")}</select>`;
+  } else if (currentScreen === "report") {
+    filtersHTML = `<select class="dd-select" id="f-report-promo">${promoOptions()
+      .map((o) => `<option value="${o.value}" ${o.value === state.reportPromoId ? "selected" : ""}>${o.label}</option>`)
+      .join("")}</select>`;
   }
 
   const isSample = DATA.__source === "sample";
@@ -96,6 +102,7 @@ function buildTopbar() {
   bind("f-daily-promo", (e) => { state.dailyPromoId = e.target.value; renderDaily(DATA, state.dailyPromoId); });
   bind("f-inflow-promo", (e) => { state.inflowPromoId = e.target.value; renderInflow(DATA, state.inflowPromoId); });
   bind("f-coupon-promo", (e) => { state.couponPromoId = e.target.value; renderCoupon(DATA, state.couponPromoId); });
+  bind("f-report-promo", (e) => { state.reportPromoId = e.target.value; renderReport(DATA, state.reportPromoId); });
 }
 
 /* ---------------------------------------------------------------
@@ -137,6 +144,7 @@ async function init() {
   state.dailyPromoId = state.promoId;
   state.inflowPromoId = state.promoId;
   state.couponPromoId = state.promoId;
+  state.reportPromoId = state.promoId;
 
   // 사이드바 데이터 소스 배지
   $("data-source-badge").textContent =
@@ -152,6 +160,7 @@ async function init() {
     renderDaily(DATA, state.dailyPromoId);
     renderInflow(DATA, state.inflowPromoId);
     renderCoupon(DATA, state.couponPromoId);
+    renderReport(DATA, state.reportPromoId);
   }
 
   buildTopbar();

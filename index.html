@@ -19,6 +19,7 @@
     <div class="navitem" data-nav="daily"><span class="navicon">④</span>프로모션 일별 분석</div>
     <div class="navitem" data-nav="inflow"><span class="navicon">⑤</span>유입 분석</div>
     <div class="navitem" data-nav="coupon"><span class="navicon">⑥</span>쿠폰 분석</div>
+    <div class="navitem" data-nav="report"><span class="navicon">⑦</span>프로모션 보고</div>
     <div class="sidebar-footer" id="data-source-badge"></div>
   </div>
 
@@ -213,6 +214,70 @@
             </tr></thead>
             <tbody id="coupon-tbody"></tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- ========================================================= -->
+      <!-- 7. PROMOTION REPORT (프로모션 보고) -->
+      <!-- ========================================================= -->
+      <div class="screen" data-screen="report">
+        <div class="section-title" id="report-title">프로모션 보고</div>
+
+        <div class="promo-hero" id="report-periods"></div>
+
+        <div class="tabbar" id="report-periodmode-tabs" style="margin-top:10px;"></div>
+        <div class="day-pills" id="report-day-pills" style="margin-top:8px;"></div>
+
+        <div class="report-divider"></div>
+
+        <div class="section-title">핵심 실적</div>
+        <div class="kpi-grid cols4" id="report-kpi"></div>
+
+        <div class="report-divider"></div>
+
+        <div class="section-title" id="report-ai-summary-title">AI 분석 요약</div>
+        <div class="report-insight-grid" id="report-ai-summary"></div>
+
+        <div class="report-divider"></div>
+
+        <div class="section-title">주요 유입 변화</div>
+        <div class="report-change-grid">
+          <div>
+            <div class="report-change-head up">증가</div>
+            <div class="report-bullets" id="report-inflow-up"></div>
+          </div>
+          <div>
+            <div class="report-change-head down">감소</div>
+            <div class="report-bullets" id="report-inflow-down"></div>
+          </div>
+        </div>
+
+        <div class="report-divider"></div>
+
+        <div class="section-title">주요 상품 변화</div>
+        <div class="report-change-grid">
+          <div>
+            <div class="report-change-head up">증가</div>
+            <div class="report-bullets" id="report-product-up"></div>
+          </div>
+          <div>
+            <div class="report-change-head down">감소</div>
+            <div class="report-bullets" id="report-product-down"></div>
+          </div>
+        </div>
+
+        <div class="report-divider"></div>
+
+        <div class="section-title">상황 기록</div>
+        <div class="report-bullets" id="report-events"></div>
+
+        <div class="report-divider"></div>
+
+        <div class="section-title">보고용 문안</div>
+        <textarea id="report-text" class="report-textarea" readonly rows="10"></textarea>
+        <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+          <button class="btn" id="report-copy-btn">보고 문안 복사</button>
+          <span class="hint" id="report-copy-hint" style="margin:0;"></span>
         </div>
       </div>
 

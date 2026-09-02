@@ -69,6 +69,7 @@ function buildDashboardData_(ss) {
   const shopDaily = buildShopDaily_(ss, shopChannelsByDate);
   const skuDaily = buildSkuDaily_(ss, mainSkus, inflow26.byCodeDate, inflow25.byCodeDate);
   const coupons = readCoupons_(ss);
+  const situationLog = readSituationLog_(ss); // "프로모션 보고" 화면용 — 없어도 sync는 계속 진행
 
   logDebugSummaries_(shopDaily, skuDaily, promotions, mainSkus); // 진단 전용 — data.json 내용에는 영향 없음
 
@@ -82,6 +83,7 @@ function buildDashboardData_(ss) {
     skuDaily: skuDaily,
     inflowCatalog: inflowCatalog,
     coupons: coupons,
+    situationLog: situationLog,
   };
 }
 
@@ -1021,7 +1023,61 @@ function sumCatalogChannelsByDate_(catalog) {
 }
 
 // --------------------------------------------------------------------
-// 2-6. 쿠폰
+// 2-6. 상황기록 — "프로모션 보고" 화면의 정성 기록(라이브 방송/품절/특가 등).
+// 컬럼: A 프로모션 년/월(예: "26년"), B 프로모션명, C 날짜, D 상황 유형,
+//       E 대상 구분(상품/숍전체/채널), F 대상(상품코드/채널명 등), G 내용,
+//       H 종료일(선택, 기간성 상황), I 비고(선택).
+// ⚠️ 시트 이름은 "상황기록"으로 가정했다(KY 확인 필요) — diagnoseSituationLog_()로
+// 먼저 실제 시트 목록/헤더를 확인할 것. 시트가 없거나 비어 있어도 예외를 던지지
+// 않고 confirmed:false로 표시한다(readCoupons_와 동일 패턴) — KY 요청: "상황기록이
+// 일부만 입력되어 있더라도 기능을 먼저 완성"하려면 시트 부재가 전체 sync를
+// 깨뜨리면 안 된다.
+// --------------------------------------------------------------------
+var SITUATION_SHEET_NAME_ = "상황기록";
+function readSituationLog_(ss) {
+  const sheet = ss.getSheetByName(SITUATION_SHEET_NAME_);
+  if (!sheet) {
+    return { confirmed: false, note: '"' + SITUATION_SHEET_NAME_ + '" 시트를 찾을 수 없습니다. diagnoseSituationLog_()로 실제 시트 이름을 확인하세요.', items: [] };
+  }
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) {
+    return { confirmed: true, note: "시트는 있으나 데이터 행이 없습니다.", items: [] };
+  }
+  const header = values[0];
+  const idx = (name) => findColTrim_(header, name);
+  const cYearMonth = idx("프로모션 년/월");
+  const cPromo = idx("프로모션");
+  const cDate = idx("날짜");
+  const cType = idx("상황 유형");
+  const cTargetType = idx("대상 구분");
+  const cTarget = idx("대상");
+  const cContent = idx("내용");
+  const cEndDate = idx("종료일");
+  const cNote = idx("비고");
+
+  const items = [];
+  for (let r = 1; r < values.length; r++) {
+    const row = values[r];
+    if (row.every((v) => v === "" || v === null)) continue; // 빈 행 스킵
+    const dateRaw = cDate >= 0 ? row[cDate] : null;
+    if (!dateRaw) continue; // 날짜 없는 행은 기간 매칭이 불가능하므로 제외
+    items.push({
+      yearMonth: cYearMonth >= 0 ? String(row[cYearMonth]).trim() : "",
+      promoName: cPromo >= 0 ? String(row[cPromo]).trim() : "",
+      date: fmtDate_(dateRaw),
+      type: cType >= 0 ? String(row[cType]).trim() : "",
+      targetType: cTargetType >= 0 ? String(row[cTargetType]).trim() : "",
+      target: cTarget >= 0 && row[cTarget] !== "" ? String(row[cTarget]).trim() : "",
+      content: cContent >= 0 ? String(row[cContent]).trim() : "",
+      endDate: cEndDate >= 0 && row[cEndDate] ? fmtDate_(row[cEndDate]) : "",
+      note: cNote >= 0 ? String(row[cNote]).trim() : "",
+    });
+  }
+  return { confirmed: true, note: "", items: items };
+}
+
+// --------------------------------------------------------------------
+// 2-7. 쿠폰
 // ⚠️ TODO: Raw 시트 컬럼 구조 확인 후 구현. 현재는 컬럼 미확인 상태이므로
 //    confirmed:false 로 표시하고, 프론트는 이 값을 보고 경고 배너를 띄웁니다.
 // --------------------------------------------------------------------
@@ -1216,4 +1272,40 @@ function diagnoseInflowExpansion_() {
     );
     Logger.log('[진단:확장] "' + sheetName + '" 상품코드 샘플(최대 20개): ' + JSON.stringify(codeList.slice(0, 20)));
   });
+}
+
+// ====================================================================
+// 6. 진단 전용 — "프로모션 보고" 상황기록 시트 확인 (읽기 전용, data.json 미영향)
+// SITUATION_SHEET_NAME_("상황기록")이 실제 시트 이름과 일치하는지, 헤더가
+// A~I 컬럼 스펙(프로모션 년/월, 프로모션, 날짜, 상황 유형, 대상 구분, 대상,
+// 내용, 종료일, 비고)과 맞는지 먼저 이 함수로 확인한 뒤 syncToGitHub()를
+// 실행할 것.
+// ====================================================================
+function diagnoseSituationLog_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const allSheetNames = ss.getSheets().map(function (s) { return s.getName(); });
+  Logger.log('[진단:상황기록] 전체 시트 목록: ' + JSON.stringify(allSheetNames));
+
+  const sheet = ss.getSheetByName(SITUATION_SHEET_NAME_);
+  if (!sheet) {
+    Logger.log(
+      '[진단:상황기록] "' + SITUATION_SHEET_NAME_ + '" 이름의 시트를 찾을 수 없습니다. ' +
+      '위 시트 목록에서 실제 이름을 확인해 Code.gs의 SITUATION_SHEET_NAME_ 값을 맞춰주세요.'
+    );
+    return;
+  }
+  const values = sheet.getDataRange().getValues();
+  Logger.log('[진단:상황기록] 헤더(1행): ' + JSON.stringify(values[0]));
+  Logger.log('[진단:상황기록] 총 데이터 행 수: ' + Math.max(0, values.length - 1));
+  Logger.log('[진단:상황기록] 샘플(최대 5행): ' + JSON.stringify(values.slice(1, 6)));
+
+  const result = readSituationLog_(ss);
+  Logger.log(
+    '[진단:상황기록] 파싱 결과 confirmed=' + result.confirmed +
+    ', 파싱된 항목 수=' + result.items.length +
+    (result.note ? ', note=' + result.note : '')
+  );
+  if (result.items.length > 0) {
+    Logger.log('[진단:상황기록] 파싱된 항목 샘플(최대 3개): ' + JSON.stringify(result.items.slice(0, 3)));
+  }
 }
